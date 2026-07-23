@@ -1,0 +1,27 @@
+# Python virtual environment directories
+venv/
+.venv/
+
+# Ignore generated outputs and local runtime files
+outputs/
+results.csv
+
+# Ignore local data/images
+train/images/
+train/**/*.jpg
+train/**/*.png
+train/**/*.jpeg
+*.jpg
+*.jpeg
+*.png
+
+# Ignore model weights and large binaries
+*.pt
+*.pth
+*.onnx
+
+# Ignore editor and system files
+__pycache__/
+*.py[cod]
+.DS_Store
+*.swp
