@@ -75,14 +75,33 @@ docker run --rm -it -v $(pwd)/train:/app/train -v $(pwd)/outputs:/app/outputs ro
   python mask_plates.py --weights license_plate_detector.pt --source train/images --out outputs/masked --mode black --ocr --ocr-langs en --output-csv results.csv --device auto --conf 0.1 --imgsz 640 --classes "license_plate,license plate,plate"
 ```
 
-## Files
+## Project structure
 
-- `mask_plates.py`: Detects license plates, masks them, and optionally performs OCR.
-- `watermark_removal/remove_watermark.py`: Removes bottom-edge watermark text from images.
-- `requirements.txt`: Python dependencies required by the scripts.
-- `deeplab.py`, `sample.py`, `inspect_model.py`: supporting scripts.
+```text
+road-defect_anonymization/
+├── mask_plates.py
+├── requirements.txt
+├── README.md
+├── Dockerfile
+├── .dockerignore
+├── deeplab.py
+├── inspect_model.py
+├── sample.py
+├── exif_geo_tag/
+│   └── store_geo_tag_exif.py
+├── watermark_removal/
+│   ├── remove_watermark.py
+│   ├── core.py
+│   ├── image.py
+│   ├── masking.py
+│   └── text_region_detector.py
+├── train/
+├── outputs/
+└── venv/
+```
 
 ## Notes
 
 - Do not commit model weights or image data to the repository.
 - Use `train/images` only for source data; this directory is ignored by `.gitignore`.
+- The repository currently keeps the large model weights and image data out of version control.
