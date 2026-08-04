@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+import sys
+
+import cv2
+import numpy as np
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from text_region_detector import TextRegionDetector
+from masking import redact_pixels
+
+
+def merge_bboxes(bboxes: list[tuple[int, int, int, int]]) -> list[tuple[int, int, int, int]]:
+    if not bboxes:
+        return []
+
+    def boxes_should_merge(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> bool:
+        ax1, ay1, ax2, ay2 = a
+        bx1, by1, bx2, by2 = b
+
+        y_overlap = min(ay2, by2) - max(ay1, by1)
+        x_overlap = min(ax2, bx2) - max(ax1, bx1)
+        y_tol = 10
+        x_tol = 15
+
+        vertical_close = by1 <= ay2 + y_tol and ay1 <= by2 + y_tol
+        horizontal_close = bx1 <= ax2 + x_tol and ax1 <= bx2 + x_tol
+
+        return vertical_close and horizontal_close and (y_overlap >= -y_tol or x_overlap >= -x_tol)
+
+    sorted_boxes = sorted(bboxes, key=lambda x: (x[1], x[0]))
+    merged: list[list[int]] = [list(sorted_boxes[0])]
+
+    for x1, y1, x2, y2 in sorted_boxes[1:]:
+        last = merged[-1]
+        if boxes_should_merge(tuple(last), (x1, y1, x2, y2)):
+            last[0] = min(last[0], x1)
+            last[1] = min(last[1], y1)
+            last[2] = max(last[2], x2)
+            last[3] = max(last[3], y2)
+        else:
+            merged.append([x1, y1, x2, y2])
+
+    return [tuple(box) for box in merged]
+
+
+def load_image(path: Path) -> np.ndarray:
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise FileNotFoundError(f"Could not read image: {path}")
+    return image
+
+
+def save_image(path: Path, image: np.ndarray) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ok = cv2.imwrite(str(path), image)
+    if not ok:
+        raise RuntimeError(f"Could not write image: {path}")
+
+
+def remove_bottom_watermark(input_path: str, output_path: str, detection_output_path: str | None = None) -> dict:
+    input_file = Path(input_path)
+    output_file = Path(output_path)
+
+    image = load_image(input_file)
+    detector = TextRegionDetector()
+    regions = detector.detect_bottom_watermark(image)
+
+    if detection_output_path is not None:
+        detection_image = image.copy()
+        detection_bboxes = [
+            (entity.bbox.x1, entity.bbox.y1, entity.bbox.x2, entity.bbox.y2)
+            for entity in regions
+            if entity.bbox is not None
+        ]
+        for x1, y1, x2, y2 in merge_bboxes(detection_bboxes):
+            cv2.rectangle(
+                detection_image,
+                (x1, y1),
+                (x2, y2),
+                (0, 255, 0),
+                2,
+            )
+        save_image(Path(detection_output_path), detection_image)
+
+    phi_regions = []
+    for entity in regions:
+        bbox = entity.bbox
+        if bbox is None:
+            continue
+        phi_regions.append({"bbox": (bbox.x1, bbox.y1, bbox.x2, bbox.y2), "zone": "anatomy"})
+
+    cleaned, mask = redact_pixels(image, phi_regions, ds=None)
+    save_image(output_file, cleaned)
+
+    return {
+        "input": str(input_file),
+        "output": str(output_file),
+        "detections": len(phi_regions),
+        "mask_pixels": int(np.sum(mask > 0)),
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Detect and remove bottom-edge watermark text from an image")
+    parser.add_argument("input_image", help="Path to the input image")
+    parser.add_argument("output_image", help="Path to save the cleaned image")
+    parser.add_argument(
+        "--detection-output",
+        dest="detection_output",
+        help="Optional path to save an image with the detected text boxes overlaid",
+    )
+    args = parser.parse_args()
+
+    result = remove_bottom_watermark(args.input_image, args.output_image, args.detection_output)
+    print(result)
+
+
+if __name__ == "__main__":
+    main()
