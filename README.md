@@ -43,6 +43,23 @@ pip install -r requirements.txt
   --detection-output outputs/detection_boxes.jpg
 ```
 
+## Preserve only GPS/geo EXIF tags
+
+```bash
+./venv/bin/python3 exif_geo_tag/store_geo_tag_exif.py \
+  input_image.jpg \
+  output_image.jpg
+```
+
+Or process a whole directory:
+
+```bash
+./venv/bin/python3 exif_geo_tag/store_geo_tag_exif.py \
+  input_dir \
+  output_dir \
+  --recursive
+```
+
 ## Docker
 
 Build the image:
