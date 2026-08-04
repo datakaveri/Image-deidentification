@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pt
+*.pth
+*.onnx
+.venv/
+venv/
+outputs/
+train/images/
+*.jpg
+*.jpeg
+*.png
+*.csv
+.git/
+.gitignore
