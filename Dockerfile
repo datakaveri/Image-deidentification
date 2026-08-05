@@ -19,4 +19,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 COPY . .
 
-CMD ["python", "mask_plates.py", "--help"]
+WORKDIR /app
+
+ENTRYPOINT ["python"]
+CMD ["app/sensitive_data_masking/mask_plates.py", "--help"]
