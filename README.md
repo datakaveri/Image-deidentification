@@ -20,8 +20,8 @@ pip install -r requirements.txt
 ## Run plate masking and OCR
 
 ```bash
-./venv/bin/python3 mask_plates.py \
-  --weights license_plate_detector.pt \
+./venv/bin/python3 app/sensitive_data_masking/mask_plates.py \
+  --weights app/sensitive_data_masking/license_plate_detector.pt \
   --source train/images \
   --out outputs/masked \
   --mode black \
@@ -37,8 +37,8 @@ pip install -r requirements.txt
 ## Run watermark removal
 
 ```bash
-./venv/bin/python3 watermark_removal/remove_watermark.py \
-  watermark_removal/IMG20260730125027.jpg \
+./venv/bin/python3 app/watermark_removal/remove_watermark.py \
+  app/watermark_removal/IMG20260730125027.jpg \
   outputs/cleaned.jpg \
   --detection-output outputs/detection_boxes.jpg
 ```
@@ -46,7 +46,7 @@ pip install -r requirements.txt
 ## Preserve only GPS/geo EXIF tags
 
 ```bash
-./venv/bin/python3 exif_geo_tag/store_geo_tag_exif.py \
+./venv/bin/python3 app/exif_geo_tag/store_geo_tag_exif.py \
   input_image.jpg \
   output_image.jpg
 ```
@@ -54,7 +54,7 @@ pip install -r requirements.txt
 Or process a whole directory:
 
 ```bash
-./venv/bin/python3 exif_geo_tag/store_geo_tag_exif.py \
+./venv/bin/python3 app/exif_geo_tag/store_geo_tag_exif.py \
   input_dir \
   output_dir \
   --recursive
@@ -72,32 +72,46 @@ Run the plate-masking script inside the container:
 
 ```bash
 docker run --rm -it -v $(pwd)/train:/app/train -v $(pwd)/outputs:/app/outputs road-defect-anonymization \
-  python mask_plates.py --weights license_plate_detector.pt --source train/images --out outputs/masked --mode black --ocr --ocr-langs en --output-csv results.csv --device auto --conf 0.1 --imgsz 640 --classes "license_plate,license plate,plate"
+  python app/sensitive_data_masking/mask_plates.py --weights app/sensitive_data_masking/license_plate_detector.pt --source train/images --out outputs/masked --mode black --ocr --ocr-langs en --output-csv results.csv --device auto --conf 0.1 --imgsz 640 --classes "license_plate,license plate,plate"
 ```
 
 ## Project structure
 
 ```text
 road-defect_anonymization/
-├── mask_plates.py
-├── requirements.txt
-├── README.md
-├── Dockerfile
 ├── .dockerignore
-├── deeplab.py
-├── inspect_model.py
-├── sample.py
-├── exif_geo_tag/
-│   └── store_geo_tag_exif.py
-├── watermark_removal/
-│   ├── remove_watermark.py
-│   ├── core.py
-│   ├── image.py
-│   ├── masking.py
-│   └── text_region_detector.py
-├── train/
+├── Dockerfile
+├── README.md
+├── app/
+│   ├── exif_geo_tag/
+│   │   └── store_geo_tag_exif.py
+│   ├── sensitive_data_masking/
+│   │   ├── deeplab.py
+│   │   ├── inspect_model.py
+│   │   ├── license_plate_detector.pt
+│   │   ├── mask_plates.py
+│   │   ├── sample.py
+│   │   └── yolov8n.pt
+│   └── watermark_removal/
+│       ├── IMG20260730125027.jpg
+│       ├── IMG20260730154858.jpg
+│       ├── IMG20260804122250.jpg
+│       ├── cleaned.jpg
+│       ├── cleaned2.jpg
+│       ├── core.py
+│       ├── detection_boxes.jpg
+│       ├── image.py
+│       ├── masking.py
+│       ├── remove_watermark.py
+│       ├── test_output.png
+│       ├── test_watermark.png
+│       └── text_region_detector.py
 ├── outputs/
-└── venv/
+├── requirements.txt
+├── results.csv
+├── train/
+├── venv/
+└── .venv/
 ```
 
 ## Notes
