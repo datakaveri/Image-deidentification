@@ -1,0 +1,15 @@
+{
+  "input_dir": "app/images",
+  "output_dir": "app/output/final",
+  "temp_dir": "app/output/temp",
+  "weights": "app/sensitive_data_masking/license_plate_detector.pt",
+  "device": "auto",
+  "mask_mode": "black",
+  "ocr": false,
+  "ocr_langs": "en",
+  "conf": 0.1,
+  "imgsz": 640,
+  "high_thresh": 500.0,
+  "low_thresh": 100.0,
+  "ext": "jpg,jpeg,png,bmp,tif,tiff,webp"
+}

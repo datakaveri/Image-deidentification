@@ -125,8 +125,9 @@ def get_sensitive_mask(model, device, pil_img, orig_shape, dilation_size):
     
     # Target PASCAL VOC classes:
     # 2: bicycle, 6: bus, 7: car, 14: motorbike, 15: person, 19: train
-    sensitive_classes = {2, 6, 7, 14, 15, 19}
-    
+    # sensitive_classes = {2, 6, 7, 14, 15, 19}
+    sensitive_classes = {15}
+
     # Create binary mask base
     raw_mask = np.isin(predictions, list(sensitive_classes)).astype(np.uint8) * 255
     

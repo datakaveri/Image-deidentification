@@ -4,6 +4,7 @@ venv/
 
 # Ignore generated outputs and local runtime files
 outputs/
+app/output/
 results.csv
 
 # Ignore local data/images
@@ -16,7 +17,6 @@ train/**/*.jpeg
 *.png
 
 # Ignore model weights and large binaries
-*.pt
 *.pth
 *.onnx
 

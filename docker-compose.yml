@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   road-defect-app:
     build: .
@@ -7,10 +5,8 @@ services:
     volumes:
       - ./train:/app/train
       - ./outputs:/app/outputs
-      - ./app/sensitive_data_masking:/app/app/sensitive_data_masking
-      - ./app/watermark_removal:/app/app/watermark_removal
-      - ./app/exif_geo_tag:/app/app/exif_geo_tag
+      - ./app:/app/app
     working_dir: /app
     entrypoint: ["python"]
-    command: ["app/sensitive_data_masking/mask_plates.py", "--help"]
+    command: ["main.py", "--help"]
     tty: true
