@@ -27,6 +27,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "high_thresh": 500.0,
     "low_thresh": 100.0,
     "ext": "jpg,jpeg,png,bmp,tif,tiff,webp",
+    "exif_strip": True,
+    "watermark_removal": True,
+    "human_mask": True,
+    "plate_mask": True,
+    "resizing": True,
 }
 
 
@@ -52,6 +57,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--high-thresh", type=float, default=None, help="High image quality threshold for resizing")
     parser.add_argument("--low-thresh", type=float, default=None, help="Low image quality threshold for resizing")
     parser.add_argument("--ext", default=None, help="Comma-separated list of image extensions to process")
+    parser.add_argument("--exif-strip", dest="exif_strip", action="store_true", default=None, help="Enable EXIF stripping")
+    parser.add_argument("--no-exif-strip", dest="exif_strip", action="store_false", help="Disable EXIF stripping")
+    parser.add_argument("--watermark-removal", dest="watermark_removal", action="store_true", default=None, help="Enable watermark removal")
+    parser.add_argument("--no-watermark-removal", dest="watermark_removal", action="store_false", help="Disable watermark removal")
+    parser.add_argument("--human-mask", dest="human_mask", action="store_true", default=None, help="Enable human masking")
+    parser.add_argument("--no-human-mask", dest="human_mask", action="store_false", help="Disable human masking")
+    parser.add_argument("--plate-mask", dest="plate_mask", action="store_true", default=None, help="Enable plate masking")
+    parser.add_argument("--no-plate-mask", dest="plate_mask", action="store_false", help="Disable plate masking")
+    parser.add_argument("--resizing", dest="resizing", action="store_true", default=None, help="Enable resizing")
+    parser.add_argument("--no-resizing", dest="resizing", action="store_false", help="Disable resizing")
     return parser
 
 
@@ -130,6 +145,11 @@ def main() -> None:
     high_thresh = float(resolve_value(args.high_thresh, config.get("high_thresh"), DEFAULT_CONFIG["high_thresh"]))
     low_thresh = float(resolve_value(args.low_thresh, config.get("low_thresh"), DEFAULT_CONFIG["low_thresh"]))
     extensions = [item.strip().lower() for item in str(resolve_value(args.ext, config.get("ext"), DEFAULT_CONFIG["ext"])).split(",") if item.strip()]
+    exif_strip = bool(resolve_value(args.exif_strip, config.get("exif_strip"), DEFAULT_CONFIG["exif_strip"]))
+    watermark_removal = bool(resolve_value(args.watermark_removal, config.get("watermark_removal"), DEFAULT_CONFIG["watermark_removal"]))
+    human_mask = bool(resolve_value(args.human_mask, config.get("human_mask"), DEFAULT_CONFIG["human_mask"]))
+    plate_mask = bool(resolve_value(args.plate_mask, config.get("plate_mask"), DEFAULT_CONFIG["plate_mask"]))
+    resizing = bool(resolve_value(args.resizing, config.get("resizing"), DEFAULT_CONFIG["resizing"]))
 
     if not input_dir.exists() or not input_dir.is_dir():
         raise SystemExit(f"Input directory not found: {input_dir}")
@@ -153,98 +173,120 @@ def main() -> None:
 
     print(f"Discovered {len(image_files)} images from {input_dir}")
 
-    run_command(
-        [
-            sys.executable,
-            "app/exif_geo_tag/store_geo_tag_exif.py",
-            str(input_dir),
-            str(exif_dir),
-            "--recursive",
-        ],
-        "Step 1/5: Strip EXIF metadata except GPS/geo tags",
-    )
+    prev_dir = input_dir
+    if exif_strip:
+        run_command(
+            [
+                sys.executable,
+                "app/exif_geo_tag/store_geo_tag_exif.py",
+                str(input_dir),
+                str(exif_dir),
+                "--recursive",
+            ],
+            "Step 1/5: Strip EXIF metadata except GPS/geo tags",
+        )
+        prev_dir = exif_dir
+    else:
+        print("Skipping EXIF stripping step")
 
-    for src_image in image_files:
-        rel_path = src_image.relative_to(input_dir)
-        exif_image = exif_dir / rel_path
-        watermark_image = watermark_dir / rel_path
-        watermark_image.parent.mkdir(parents=True, exist_ok=True)
-        if not exif_image.exists():
-            print(f"Skipping watermark step for {rel_path}: EXIF output missing")
-            continue
-        try:
-            run_command(
-                [
-                    sys.executable,
-                    "app/watermark_removal/remove_watermark.py",
-                    str(exif_image),
-                    str(watermark_image),
-                ],
-                f"Step 2/5: Remove watermark from {rel_path}",
-            )
-        except RuntimeError as exc:
-            print(f"Warning: {exc}. Falling back to the EXIF-cleaned image.")
-            shutil.copy2(exif_image, watermark_image)
+    if watermark_removal:
+        for src_image in image_files:
+            rel_path = src_image.relative_to(input_dir)
+            source_image = prev_dir / rel_path if prev_dir != input_dir else src_image
+            watermark_image = watermark_dir / rel_path
+            watermark_image.parent.mkdir(parents=True, exist_ok=True)
+            if not source_image.exists():
+                print(f"Skipping watermark step for {rel_path}: source image missing")
+                continue
+            try:
+                run_command(
+                    [
+                        sys.executable,
+                        "app/watermark_removal/remove_watermark.py",
+                        str(source_image),
+                        str(watermark_image),
+                    ],
+                    f"Step 2/5: Remove watermark from {rel_path}",
+                )
+            except RuntimeError as exc:
+                print(f"Warning: {exc}. Falling back to the prior image source.")
+                shutil.copy2(source_image, watermark_image)
+        prev_dir = watermark_dir
+    else:
+        print("Skipping watermark removal step")
 
-    run_command(
-        [
+    if human_mask:
+        run_command(
+            [
+                sys.executable,
+                "app/sensitive_data_masking/deeplab.py",
+                "--input-dir",
+                str(prev_dir),
+                "--output-dir",
+                str(human_mask_dir),
+                "--mask-type",
+                "blur",
+                "--device",
+                device,
+            ],
+            "Step 3/5: Apply human masking with DeepLab",
+        )
+        prev_dir = human_mask_dir
+    else:
+        print("Skipping human masking step")
+
+    if plate_mask:
+        plate_args = [
             sys.executable,
-            "app/sensitive_data_masking/deeplab.py",
-            "--input-dir",
-            str(watermark_dir),
-            "--output-dir",
-            str(human_mask_dir),
-            "--mask-type",
-            "blur",
+            "app/sensitive_data_masking/mask_plates.py",
+            "--weights",
+            str(weights),
+            "--source",
+            str(prev_dir),
+            "--out",
+            str(plate_mask_dir),
+            "--mode",
+            mask_mode,
             "--device",
             device,
-        ],
-        "Step 3/5: Apply human masking with DeepLab",
-    )
-
-    plate_args = [
-        sys.executable,
-        "app/sensitive_data_masking/mask_plates.py",
-        "--weights",
-        str(weights),
-        "--source",
-        str(human_mask_dir),
-        "--out",
-        str(plate_mask_dir),
-        "--mode",
-        mask_mode,
-        "--device",
-        device,
-        "--conf",
-        str(conf),
-        "--imgsz",
-        str(imgsz),
-        "--classes",
-        "license plate,number plate,plate",
-        "--ext",
-        ",".join(extensions),
-    ]
-    if ocr:
-        plate_args.extend(["--ocr", "--ocr-langs", ocr_langs])
-    plate_args.extend(["--output-csv", str(temp_dir / "plate_results.csv")])
-
-    run_command(plate_args, "Step 4/5: Mask license plates")
-
-    run_command(
-        [
-            sys.executable,
-            "app/resizing.py",
-            str(plate_mask_dir),
-            str(output_dir),
-            "--high-thresh",
-            str(high_thresh),
-            "--low-thresh",
-            str(low_thresh),
+            "--conf",
+            str(conf),
+            "--imgsz",
+            str(imgsz),
+            "--classes",
+            "license plate,number plate,plate",
             "--ext",
             ",".join(extensions),
-        ],
-        "Step 5/5: Resize the final images",
-    )
+        ]
+        if ocr:
+            plate_args.extend(["--ocr", "--ocr-langs", ocr_langs])
+        plate_args.extend(["--output-csv", str(temp_dir / "plate_results.csv")])
+
+        run_command(plate_args, "Step 4/5: Mask license plates")
+        prev_dir = plate_mask_dir
+    else:
+        print("Skipping plate masking step")
+
+    if resizing:
+        run_command(
+            [
+                sys.executable,
+                "app/resizing.py",
+                str(prev_dir),
+                str(output_dir),
+                "--high-thresh",
+                str(high_thresh),
+                "--low-thresh",
+                str(low_thresh),
+                "--ext",
+                ",".join(extensions),
+            ],
+            "Step 5/5: Resize the final images",
+        )
+    else:
+        print("Skipping resizing step")
+        if prev_dir != output_dir:
+            shutil.copytree(prev_dir, output_dir, dirs_exist_ok=True)
 
     print("\nPipeline complete.")
     print(f"Final images saved to: {output_dir}")
