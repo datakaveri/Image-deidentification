@@ -1,12 +1,8 @@
 # Road Defect Anonymization
 
-This project builds an end-to-end image anonymization pipeline for road-defect datasets. The workflow is:
+This project builds an end-to-end image anonymization pipeline for road-defect datasets. The complete pipeline flow is:
 
-1. Strip EXIF metadata while preserving GPS/geo tags.
-2. Remove watermarks from the image.
-3. Mask human figures using a DeepLab segmentation model.
-4. Detect and mask license plates using a YOLO-based detector.
-5. Resize the final images for downstream training or sharing.
+`EXIF cleaning` -> `watermark removal (OCR-based)` -> `human masking` -> `license plate masking` -> `resizing`
 
 The main entrypoint is [main.py](main.py), which runs the full sequence in one command.
 
@@ -36,6 +32,7 @@ pip install -r requirements.txt
 
 ```bash
 python main.py \
+  --config pipeline_config.json \
   --input-dir train/images \
   --output-dir outputs/final \
   --temp-dir outputs/temp \
@@ -46,6 +43,29 @@ python main.py \
   --ocr
 ```
 
+### Configuration
+
+The pipeline supports configuration via `pipeline_config.json` and command-line overrides. Example config fields:
+
+- `input_dir`, `output_dir`, `temp_dir`
+- `weights`, `device`, `mask_mode`
+- `ocr`, `ocr_langs`
+- `conf`, `imgsz`, `high_thresh`, `low_thresh`
+- `ext`
+- `exif_strip`, `watermark_removal`, `human_mask`, `plate_mask`, `resizing`
+
+Local run using config:
+
+```bash
+python main.py --config pipeline_config.json
+```
+
+Override a config value from the command line:
+
+```bash
+python main.py --config pipeline_config.json --ocr --mask-mode blur
+```
+
 ### What the pipeline produces
 
 - Intermediate outputs are written under [outputs](outputs)
@@ -53,6 +73,19 @@ python main.py \
 - Plate detection results are saved under [outputs](outputs)
 
 ## Run individual steps
+
+### 2. Remove watermark (OCR-based)
+
+```bash
+python app/watermark_removal/remove_watermark.py \
+  app/watermark_removal/IMG20260730125027.jpg \
+  outputs/cleaned.jpg \
+  --detection-output outputs/detection_boxes.jpg
+```
+
+This step uses OCR to detect text regions in the image border before redacting watermark text.
+
+### 3. Mask humans with DeepLab
 
 ### 1. Preserve only GPS/geo EXIF tags
 
@@ -124,6 +157,7 @@ docker run --rm -it \
   -v $(pwd)/outputs:/app/outputs \
   road-defect-anonymization \
   python main.py \
+    --config pipeline_config.json \
     --input-dir train/images \
     --output-dir outputs/final \
     --temp-dir outputs/temp \
@@ -146,8 +180,7 @@ To run the pipeline from the compose service:
 
 ```bash
 docker compose run --rm road-defect-app \
-  python main.py \
-    --input-dir train/images \
+  python main.py \    --config pipeline_config.json \    --input-dir train/images \
     --output-dir outputs/final \
     --temp-dir outputs/temp \
     --device auto \
