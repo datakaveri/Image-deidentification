@@ -28,26 +28,6 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Run the full pipeline
-
-```bash
-python main.py \
-  --config pipeline_config.json \
-  --input-dir train/images \
-  --output-dir outputs/final \
-  --temp-dir outputs/temp \
-  --device auto \
-  --mask-mode black \
-  --conf 0.1 \
-  --imgsz 640 \
-  --ocr \
-  --exif_strip True \
-  --watermark_removal True\
-  --human_mask True \
-  --plate_mask True \
-  --resizing True
-```
-
 ### Configuration
 
 The pipeline supports configuration via `pipeline_config.json` and command-line overrides. Example config fields:
@@ -75,6 +55,26 @@ python main.py --config pipeline_config.json --ocr --mask-mode blur
 
 - Intermediate outputs are written under temp-dir named folder for debugging
 - Final resized images are written under output-dir named folder
+
+## Run the full pipeline
+
+```bash
+python main.py \
+  --config pipeline_config.json \
+  --input-dir train/images \
+  --output-dir outputs/final \
+  --temp-dir outputs/temp \
+  --device auto \
+  --mask-mode black \
+  --conf 0.1 \
+  --imgsz 640 \
+  --ocr \
+  --exif_strip True \
+  --watermark_removal True\
+  --human_mask True \
+  --plate_mask True \
+  --resizing True
+```
 
 ## Run individual steps
 
@@ -150,15 +150,7 @@ docker run --rm -it \
   -v $(pwd)/outputs:/app/outputs \
   road-defect-anonymization \
   python main.py \
-    --config pipeline_config.json \
-    --input-dir train/images \
-    --output-dir outputs/final \
-    --temp-dir outputs/temp \
-    --device auto \
-    --mask-mode black \
-    --conf 0.1 \
-    --imgsz 640 \
-    --ocr
+    --config pipeline_config.json
 ```
 
 ## Docker Compose
@@ -173,14 +165,7 @@ To run the pipeline from the compose service:
 
 ```bash
 docker compose run --rm road-defect-app \
-  python main.py \    --config pipeline_config.json \    --input-dir train/images \
-    --output-dir outputs/final \
-    --temp-dir outputs/temp \
-    --device auto \
-    --mask-mode black \
-    --conf 0.1 \
-    --imgsz 640 \
-    --ocr
+  python main.py \    --config pipeline_config.json
 ```
 
 ## Project structure
