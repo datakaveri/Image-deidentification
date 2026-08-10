@@ -40,7 +40,12 @@ python main.py \
   --mask-mode black \
   --conf 0.1 \
   --imgsz 640 \
-  --ocr
+  --ocr \
+  --exif_strip True \
+  --watermark_removal True\
+  --human_mask True \
+  --plate_mask True \
+  --resizing True
 ```
 
 ### Configuration
@@ -68,24 +73,10 @@ python main.py --config pipeline_config.json --ocr --mask-mode blur
 
 ### What the pipeline produces
 
-- Intermediate outputs are written under [outputs](outputs)
-- Final resized images are written under [outputs](outputs)
-- Plate detection results are saved under [outputs](outputs)
+- Intermediate outputs are written under temp-dir named folder for debugging
+- Final resized images are written under output-dir named folder
 
 ## Run individual steps
-
-### 2. Remove watermark (OCR-based)
-
-```bash
-python app/watermark_removal/remove_watermark.py \
-  app/watermark_removal/IMG20260730125027.jpg \
-  outputs/cleaned.jpg \
-  --detection-output outputs/detection_boxes.jpg
-```
-
-This step uses OCR to detect text regions in the image border before redacting watermark text.
-
-### 3. Mask humans with DeepLab
 
 ### 1. Preserve only GPS/geo EXIF tags
 
@@ -96,7 +87,7 @@ python app/exif_geo_tag/store_geo_tag_exif.py \
   --recursive
 ```
 
-### 2. Remove watermark
+### 2. Remove watermark (OCR-based)
 
 ```bash
 python app/watermark_removal/remove_watermark.py \
@@ -104,6 +95,8 @@ python app/watermark_removal/remove_watermark.py \
   outputs/cleaned.jpg \
   --detection-output outputs/detection_boxes.jpg
 ```
+
+The above step uses OCR to detect text regions in the image border before redacting watermark text.
 
 ### 3. Mask humans with DeepLab
 
