@@ -1,7 +1,7 @@
 {
-  "input_dir": "app/images",
-  "output_dir": "app/output/final",
-  "temp_dir": "app/output/temp",
+  "input_dir": "app/crop_images",
+  "output_dir": "app/output/crop_final",
+  "temp_dir": "app/output/temp_crop",
   "weights": "app/sensitive_data_masking/license_plate_detector.pt",
   "device": "auto",
   "mask_mode": "black",
@@ -11,5 +11,10 @@
   "imgsz": 640,
   "high_thresh": 500.0,
   "low_thresh": 100.0,
-  "ext": "jpg,jpeg,png,bmp,tif,tiff,webp"
+  "ext": "jpg,jpeg,png,bmp,tif,tiff,webp",
+  "exif_strip": true,
+  "watermark_removal": true,
+  "human_mask": true,
+  "plate_mask": true,
+  "resizing": true
 }

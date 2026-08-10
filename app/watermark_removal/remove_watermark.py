@@ -7,10 +7,21 @@ import sys
 import cv2
 import numpy as np
 
+try:
+    from paddleocr import PaddleOCR
+    _HAS_PADDLEOCR = True
+except ImportError:
+    _HAS_PADDLEOCR = False
+
+try:
+    import easyocr
+    _HAS_EASYOCR = True
+except ImportError:
+    _HAS_EASYOCR = False
+
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from text_region_detector import TextRegionDetector
 from masking import redact_pixels
 
 
@@ -62,38 +73,76 @@ def save_image(path: Path, image: np.ndarray) -> None:
         raise RuntimeError(f"Could not write image: {path}")
 
 
+def detect_watermark_regions(image: np.ndarray, border_fraction: float = 0.15) -> list[tuple[int, int, int, int]]:
+    if not _HAS_PADDLEOCR and not _HAS_EASYOCR:
+        raise ImportError(
+            "Watermark detection requires PaddleOCR or EasyOCR. "
+            "Install one of them in the virtual environment."
+        )
+
+    h, w = image.shape[:2]
+    band_h = max(24, int(h * border_fraction))
+    band_w = max(24, int(w * border_fraction))
+
+    regions = []
+    edge_slices = [
+        (0, 0, w, band_h),
+        (0, h - band_h, w, h),
+        (0, 0, band_w, h),
+        (w - band_w, 0, w, h),
+    ]
+
+    if _HAS_PADDLEOCR:
+        ocr = PaddleOCR(use_angle_cls=False, lang="en", enable_mkldnn=False, use_gpu=False)
+        for x1, y1, x2, y2 in edge_slices:
+            slice_img = image[y1:y2, x1:x2]
+            if slice_img.size == 0:
+                continue
+
+            results = ocr.ocr(slice_img, cls=False)
+            for line in results:
+                for box, text, score in line:
+                    bx1, by1 = int(box[0][0]), int(box[0][1])
+                    bx2, by2 = int(box[2][0]), int(box[2][1])
+                    abs_x1 = x1 + min(bx1, bx2)
+                    abs_y1 = y1 + min(by1, by2)
+                    abs_x2 = x1 + max(bx1, bx2)
+                    abs_y2 = y1 + max(by1, by2)
+                    regions.append((abs_x1, abs_y1, abs_x2, abs_y2))
+    else:
+        reader = easyocr.Reader(["en"], gpu=False)
+        for x1, y1, x2, y2 in edge_slices:
+            slice_img = image[y1:y2, x1:x2]
+            if slice_img.size == 0:
+                continue
+
+            results = reader.readtext(slice_img)
+            for box, text, score in results:
+                bx1, by1 = int(box[0][0]), int(box[0][1])
+                bx2, by2 = int(box[2][0]), int(box[2][1])
+                abs_x1 = x1 + min(bx1, bx2)
+                abs_y1 = y1 + min(by1, by2)
+                abs_x2 = x1 + max(bx1, bx2)
+                abs_y2 = y1 + max(by1, by2)
+                regions.append((abs_x1, abs_y1, abs_x2, abs_y2))
+
+    return merge_bboxes(regions)
+
+
 def remove_bottom_watermark(input_path: str, output_path: str, detection_output_path: str | None = None) -> dict:
     input_file = Path(input_path)
     output_file = Path(output_path)
 
     image = load_image(input_file)
-    detector = TextRegionDetector()
-    regions = detector.detect_bottom_watermark(image)
+    regions = detect_watermark_regions(image, border_fraction=0.15)
 
     if detection_output_path is not None:
         detection_image = image.copy()
-        detection_bboxes = [
-            (entity.bbox.x1, entity.bbox.y1, entity.bbox.x2, entity.bbox.y2)
-            for entity in regions
-            if entity.bbox is not None
-        ]
-        for x1, y1, x2, y2 in merge_bboxes(detection_bboxes):
-            cv2.rectangle(
-                detection_image,
-                (x1, y1),
-                (x2, y2),
-                (0, 255, 0),
-                2,
-            )
+        for x1, y1, x2, y2 in regions:
+            cv2.rectangle(detection_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
         save_image(Path(detection_output_path), detection_image)
 
-    phi_regions = []
-    for entity in regions:
-        bbox = entity.bbox
-        if bbox is None:
-            continue
-        phi_regions.append({"bbox": (bbox.x1, bbox.y1, bbox.x2, bbox.y2), "zone": "anatomy"})
-
+    phi_regions = [{"bbox": (x1, y1, x2, y2), "zone": "anatomy"} for x1, y1, x2, y2 in regions]
     cleaned, mask = redact_pixels(image, phi_regions, ds=None)
     save_image(output_file, cleaned)
 
