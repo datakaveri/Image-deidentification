@@ -2,7 +2,7 @@
 
 This project builds an end-to-end image anonymization pipeline for road-defect datasets. The complete pipeline flow is:
 
-`EXIF cleaning` -> `watermark removal (OCR-based)` -> `human masking` -> `license plate masking` -> `resizing`
+`EXIF cleaning` -> `watermark removal (EasyOCR-based)` -> `human masking` -> `license plate masking` -> `resizing`
 
 The main entrypoint is [main.py](main.py), which runs the full sequence in one command.
 
@@ -69,11 +69,11 @@ python main.py \
   --conf 0.1 \
   --imgsz 640 \
   --ocr \
-  --exif_strip True \
-  --watermark_removal True\
-  --human_mask True \
-  --plate_mask True \
-  --resizing True
+  --exif-strip \
+  --watermark-removal \
+  --human-mask \
+  --plate-mask \
+  --resizing
 ```
 
 ## Run individual steps
@@ -87,7 +87,7 @@ python app/exif_geo_tag/store_geo_tag_exif.py \
   --recursive
 ```
 
-### 2. Remove watermark (OCR-based)
+### 2. Remove watermark (EasyOCR-based)
 
 ```bash
 python app/watermark_removal/remove_watermark.py \
@@ -96,7 +96,7 @@ python app/watermark_removal/remove_watermark.py \
   --detection-output outputs/detection_boxes.jpg
 ```
 
-The above step uses OCR to detect text regions in the image border before redacting watermark text.
+The above step uses EasyOCR to detect text regions in the image border before redacting watermark text.
 
 ### 3. Mask humans with DeepLab
 
@@ -135,6 +135,8 @@ python app/resizing.py \
 ```
 
 ## Docker
+
+This container installs the EasyOCR-based watermark removal pipeline and does not use PaddleOCR.
 
 Build the image:
 
