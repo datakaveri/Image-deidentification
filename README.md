@@ -1,14 +1,25 @@
 # Road Defect Anonymization
 
-This repository contains scripts for license plate detection and anonymization using YOLOv8, EasyOCR, and a watermark-removal pipeline.
+This project builds an end-to-end image anonymization pipeline for road-defect datasets. The complete pipeline flow is:
+
+`EXIF cleaning` -> `watermark removal (EasyOCR-based)` -> `human masking` -> `license plate masking` -> `resizing`
+
+The main entrypoint is [main.py](main.py), which runs the full sequence in one command.
+
+## Requirements
+
+- Python 3.9+
+- CUDA-capable GPU is optional; the pipeline will fall back to CPU when unavailable.
+- The repository expects the following model assets:
+  - [app/sensitive_data_masking/license_plate_detector.pt](app/sensitive_data_masking/license_plate_detector.pt)
 
 ## Setup
 
 1. Create and activate a virtual environment:
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 ```
 
 2. Install dependencies:
@@ -17,50 +28,115 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Run plate masking and OCR
+### Configuration
+
+The pipeline supports configuration via `pipeline_config.json` and command-line overrides. Example config fields:
+
+- `input_dir`, `output_dir`, `temp_dir`
+- `weights`, `device`, `mask_mode`
+- `ocr`, `ocr_langs`
+- `conf`, `imgsz`, `high_thresh`, `low_thresh`
+- `ext`
+- `exif_strip`, `watermark_removal`, `human_mask`, `plate_mask`, `resizing`
+
+Local run using config:
 
 ```bash
-./venv/bin/python3 app/sensitive_data_masking/mask_plates.py \
-  --weights app/sensitive_data_masking/license_plate_detector.pt \
-  --source train/images \
-  --out outputs/masked \
-  --mode black \
-  --ocr \
-  --ocr-langs en \
-  --output-csv results.csv \
+python main.py --config pipeline_config.json
+```
+
+Override a config value from the command line:
+
+```bash
+python main.py --config pipeline_config.json --ocr --mask-mode blur
+```
+
+### What the pipeline produces
+
+- Intermediate outputs are written under temp-dir named folder for debugging
+- Final resized images are written under output-dir named folder
+
+## Run the full pipeline
+
+```bash
+python main.py \
+  --config pipeline_config.json \
+  --input-dir train/images \
+  --output-dir outputs/final \
+  --temp-dir outputs/temp \
   --device auto \
+  --mask-mode black \
   --conf 0.1 \
   --imgsz 640 \
-  --classes "license_plate,license plate,plate"
+  --ocr \
+  --exif-strip \
+  --watermark-removal \
+  --human-mask \
+  --plate-mask \
+  --resizing
 ```
 
-## Run watermark removal
+## Run individual steps
+
+### 1. Preserve only GPS/geo EXIF tags
 
 ```bash
-./venv/bin/python3 app/watermark_removal/remove_watermark.py \
-  app/watermark_removal/IMG20260730125027.jpg \
-  outputs/cleaned.jpg \
-  --detection-output outputs/detection_boxes.jpg
-```
-
-## Preserve only GPS/geo EXIF tags
-
-```bash
-./venv/bin/python3 app/exif_geo_tag/store_geo_tag_exif.py \
-  input_image.jpg \
-  output_image.jpg
-```
-
-Or process a whole directory:
-
-```bash
-./venv/bin/python3 app/exif_geo_tag/store_geo_tag_exif.py \
+python app/exif_geo_tag/store_geo_tag_exif.py \
   input_dir \
   output_dir \
   --recursive
 ```
 
+### 2. Remove watermark (EasyOCR-based)
+
+```bash
+python app/watermark_removal/remove_watermark.py \
+  app/watermark_removal/IMG20260730125027.jpg \
+  outputs/cleaned.jpg \
+  --detection-output outputs/detection_boxes.jpg
+```
+
+The above step uses EasyOCR to detect text regions in the image border before redacting watermark text.
+
+### 3. Mask humans with DeepLab
+
+```bash
+python app/sensitive_data_masking/deeplab.py \
+  --input-dir outputs/temp/watermark_removed \
+  --output-dir outputs/temp/human_masked \
+  --mask-type blur
+```
+
+### 4. Mask license plates
+
+```bash
+python app/sensitive_data_masking/mask_plates.py \
+  --weights app/sensitive_data_masking/license_plate_detector.pt \
+  --source outputs/temp/human_masked \
+  --out outputs/temp/plate_masked \
+  --mode black \
+  --ocr \
+  --ocr-langs en \
+  --output-csv outputs/temp/plate_results.csv \
+  --device auto \
+  --conf 0.1 \
+  --imgsz 640 \
+  --classes "license plate,number plate,plate"
+```
+
+### 5. Resize images
+
+```bash
+python app/resizing.py \
+  outputs/temp/plate_masked \
+  outputs/final \
+  --high-thresh 500.0 \
+  --low-thresh 100.0
+```
+
 ## Docker
+
+This container installs the EasyOCR-based watermark removal pipeline and does not use PaddleOCR.
 
 Build the image:
 
@@ -68,35 +144,15 @@ Build the image:
 docker build -t road-defect-anonymization .
 ```
 
-Run the plate-masking script inside the container:
+Run the full pipeline inside the container:
 
 ```bash
 docker run --rm -it \
   -v $(pwd)/train:/app/train \
   -v $(pwd)/outputs:/app/outputs \
-  -v $(pwd)/app/sensitive_data_masking:/app/app/sensitive_data_masking \
   road-defect-anonymization \
-  python app/sensitive_data_masking/mask_plates.py --weights app/sensitive_data_masking/license_plate_detector.pt --source train/images --out outputs/masked --mode black --ocr --ocr-langs en --output-csv results.csv --device auto --conf 0.1 --imgsz 640 --classes "license_plate,license plate,plate"
-```
-
-Run watermark removal inside the container:
-
-```bash
-docker run --rm -it \
-  -v $(pwd)/outputs:/app/outputs \
-  -v $(pwd)/app/watermark_removal:/app/app/watermark_removal \
-  road-defect-anonymization \
-  python app/watermark_removal/remove_watermark.py app/watermark_removal/IMG20260730125027.jpg outputs/cleaned.jpg --detection-output outputs/detection_boxes.jpg
-```
-
-Run the EXIF geo-tag preservation utility inside the container:
-
-```bash
-docker run --rm -it \
-  -v $(pwd)/input:/app/input \
-  -v $(pwd)/output:/app/output \
-  road-defect-anonymization \
-  python app/exif_geo_tag/store_geo_tag_exif.py /app/input/input_image.jpg /app/output/output_image.jpg
+  python main.py \
+    --config pipeline_config.json
 ```
 
 ## Docker Compose
@@ -107,76 +163,38 @@ Start the service with:
 docker compose up --build
 ```
 
-This will build the image and launch a shell-ready container with the repository mounted.
-
-Run the plate-masking command inside the Compose service:
+To run the pipeline from the compose service:
 
 ```bash
 docker compose run --rm road-defect-app \
-  python app/sensitive_data_masking/mask_plates.py --weights app/sensitive_data_masking/license_plate_detector.pt --source train/images --out outputs/masked --mode black --ocr --ocr-langs en --output-csv results.csv --device auto --conf 0.1 --imgsz 640 --classes "license_plate,license plate,plate"
+  python main.py \    --config pipeline_config.json
 ```
-
-Run watermark removal inside the Compose service:
-
-```bash
-docker compose run --rm road-defect-app \
-  python app/watermark_removal/remove_watermark.py app/watermark_removal/IMG20260730125027.jpg outputs/cleaned.jpg --detection-output outputs/detection_boxes.jpg
-```
-
-Run EXIF geo-tag preservation inside the Compose service:
-
-```bash
-docker compose run --rm road-defect-app \
-  python app/exif_geo_tag/store_geo_tag_exif.py /app/input/input_image.jpg /app/output/output_image.jpg
-```
-
 
 ## Project structure
 
 ```text
 road-defect_anonymization/
-├── .dockerignore
-├── Dockerfile
-├── README.md
 ├── app/
 │   ├── exif_geo_tag/
-│   │   ├── __pycache__/
 │   │   └── store_geo_tag_exif.py
 │   ├── sensitive_data_masking/
 │   │   ├── deeplab.py
-│   │   ├── inspect_model.py
-│   │   ├── license_plate_detector.pt
 │   │   ├── mask_plates.py
-│   │   ├── sample.py
-│   │   └── yolov8n.pt
+│   │   └── license_plate_detector.pt
 │   └── watermark_removal/
-│       ├── IMG20260730125027.jpg
-│       ├── IMG20260730154858.jpg
-│       ├── IMG20260804122250.jpg
-│       ├── __pycache__/
-│       ├── cleaned.jpg
-│       ├── cleaned2.jpg
-│       ├── core.py
-│       ├── detection_boxes.jpg
-│       ├── image.py
-│       ├── masking.py
 │       ├── remove_watermark.py
-│       ├── test_output.png
-│       ├── test_watermark.png
-│       └── text_region_detector.py
-├── outputs/
+│       └── ...
+├── main.py
+├── Dockerfile
+├── docker-compose.yml
 ├── requirements.txt
-├── results.csv
-├── train/
-├── venv/
-└── .venv/
+├── README.md
+├── outputs/
+└── train/
 ```
 
 ## Notes
 
-- Do not commit model weights or image data to the repository unless explicitly required.
-- The Docker setup is designed to run without a local Python environment, mounting only the input/output folders needed at runtime.
-- The repository contains three primary workflows:
-  - `app/sensitive_data_masking/` for license plate detection, masking, and OCR
-  - `app/watermark_removal/` for watermark detection and removal
-  - `app/exif_geo_tag/` for preserving only GPS/geo EXIF tags while stripping other metadata
+- The pipeline is designed to work with image directories rather than single files.
+- The DeepLab step can be slow on CPU, so a GPU is recommended for larger datasets.
+- Do not commit model weights or large image datasets to the repository unless required.
