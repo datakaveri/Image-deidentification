@@ -5,6 +5,7 @@ venv/
 # Ignore generated outputs and local runtime files
 outputs/
 results.csv
+test_outputs/
 
 # Ignore local data/images
 train/images/
