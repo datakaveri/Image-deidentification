@@ -89,7 +89,16 @@ def detect_watermark_regions(image: np.ndarray, border_fraction: float = 0.15) -
             abs_y1 = y1 + min(by1, by2)
             abs_x2 = x1 + max(bx1, bx2)
             abs_y2 = y1 + max(by1, by2)
-            regions.append((abs_x1, abs_y1, abs_x2, abs_y2))
+
+            # Expand the detected box slightly to ensure edge pixels are included.
+            # Use a fraction of the smaller image dimension with a sensible minimum.
+            pad = max(8, int(min(h, w) * 0.03))
+            exp_x1 = max(0, abs_x1 - pad)
+            exp_y1 = max(0, abs_y1 - pad)
+            exp_x2 = min(w, abs_x2 + pad)
+            exp_y2 = min(h, abs_y2 + pad)
+
+            regions.append((exp_x1, exp_y1, exp_x2, exp_y2))
 
     return merge_bboxes(regions)
 
