@@ -1,17 +1,39 @@
+# NOTE: Docker matches these with Go filepath.Match — `*` does NOT cross `/`.
+# A bare `*.jpg` only excludes files at the build-context ROOT, so nested paths
+# need an explicit `**/` prefix.
+
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-*.pt
-*.pth
-*.onnx
+
 .venv/
 venv/
-outputs/
-train/images/
-*.jpg
-*.jpeg
-*.png
-*.csv
 .git/
 .gitignore
+
+# Runtime output — never ship into the image
+outputs/
+app/output/
+test_outputs/
+**/*.csv
+
+# Datasets and sample imagery must not be baked into the image
+train/
+samples/
+**/*.jpg
+**/*.jpeg
+**/*.png
+**/*.bmp
+**/*.tif
+**/*.tiff
+**/*.webp
+
+# Scratch copy of the plate weights used during review (the real ones live in
+# app/sensitive_data_masking/ and ARE intentionally baked in — see Dockerfile)
+models/
+
+# Two 11.8 MB PostScript screenshots accidentally committed at the repo root
+os
+torch
