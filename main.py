@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -13,10 +14,14 @@ from typing import Any, Iterable, Sequence
 
 ROOT_DIR = Path(__file__).resolve().parent
 
+# The container sets these (SKALD_* names, matching skald-dicom) so the image
+# works against the SPIDEr/TEE mount contract — /app/data, /app/config,
+# /app/output — even when the mounted config directory is empty. Outside the
+# container they are unset and the repo-relative defaults below apply.
 DEFAULT_CONFIG: dict[str, Any] = {
-    "input_dir": "train/images",
-    "output_dir": "outputs/final",
-    "temp_dir": "outputs/temp",
+    "input_dir": os.environ.get("SKALD_DATA_DIR", "train/images"),
+    "output_dir": os.environ.get("SKALD_OUTPUT_DIR", "outputs/final"),
+    "temp_dir": os.environ.get("SKALD_TEMP_DIR", "outputs/temp"),
     "weights": "app/sensitive_data_masking/license_plate_detector.pt",
     "device": "auto",
     "mask_mode": "black",
@@ -37,7 +42,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run the full anonymization pipeline: EXIF cleanup -> watermark removal -> human masking -> plate masking -> resizing"
+        description="Run the full anonymization pipeline: EXIF cleanup -> plate masking -> human masking -> watermark removal -> resizing"
     )
     parser.add_argument("--config", default="pipeline_config.json", help="Path to the JSON config file")
     parser.add_argument("--input-dir", default=None, help="Directory containing the input image dataset")
@@ -174,6 +179,7 @@ def main() -> None:
     print(f"Discovered {len(image_files)} images from {input_dir}")
 
     prev_dir = input_dir
+    # Step 1: EXIF cleaning (optional)
     if exif_strip:
         run_command(
             [
@@ -183,58 +189,13 @@ def main() -> None:
                 str(exif_dir),
                 "--recursive",
             ],
-            "Step 1/5: Strip EXIF metadata except GPS/geo tags",
+            "Step 1/4: Strip EXIF metadata except GPS/geo tags",
         )
         prev_dir = exif_dir
     else:
         print("Skipping EXIF stripping step")
 
-    if watermark_removal:
-        for src_image in image_files:
-            rel_path = src_image.relative_to(input_dir)
-            source_image = prev_dir / rel_path if prev_dir != input_dir else src_image
-            watermark_image = watermark_dir / rel_path
-            watermark_image.parent.mkdir(parents=True, exist_ok=True)
-            if not source_image.exists():
-                print(f"Skipping watermark step for {rel_path}: source image missing")
-                continue
-            try:
-                run_command(
-                    [
-                        sys.executable,
-                        "app/watermark_removal/remove_watermark.py",
-                        str(source_image),
-                        str(watermark_image),
-                    ],
-                    f"Step 2/5: Remove watermark from {rel_path}",
-                )
-            except RuntimeError as exc:
-                print(f"Warning: {exc}. Falling back to the prior image source.")
-                shutil.copy2(source_image, watermark_image)
-        prev_dir = watermark_dir
-    else:
-        print("Skipping watermark removal step")
-
-    if human_mask:
-        run_command(
-            [
-                sys.executable,
-                "app/sensitive_data_masking/deeplab.py",
-                "--input-dir",
-                str(prev_dir),
-                "--output-dir",
-                str(human_mask_dir),
-                "--mask-type",
-                "blur",
-                "--device",
-                device,
-            ],
-            "Step 3/5: Apply human masking with DeepLab",
-        )
-        prev_dir = human_mask_dir
-    else:
-        print("Skipping human masking step")
-
+    # Step 2: Plate masking (run early so plates are removed before other ops)
     if plate_mask:
         plate_args = [
             sys.executable,
@@ -262,10 +223,58 @@ def main() -> None:
             plate_args.extend(["--ocr", "--ocr-langs", ocr_langs])
         plate_args.extend(["--output-csv", str(temp_dir / "plate_results.csv")])
 
-        run_command(plate_args, "Step 4/5: Mask license plates")
+        run_command(plate_args, "Step 2/4: Mask license plates")
         prev_dir = plate_mask_dir
     else:
         print("Skipping plate masking step")
+
+    # Step 3: Human masking
+    if human_mask:
+        run_command(
+            [
+                sys.executable,
+                "app/sensitive_data_masking/deeplab.py",
+                "--input-dir",
+                str(prev_dir),
+                "--output-dir",
+                str(human_mask_dir),
+                "--mask-type",
+                "blur",
+                "--device",
+                device,
+            ],
+            "Step 3/4: Apply human masking with DeepLab",
+        )
+        prev_dir = human_mask_dir
+    else:
+        print("Skipping human masking step")
+
+    # Step 4: Watermark removal
+    if watermark_removal:
+        for src_image in image_files:
+            rel_path = src_image.relative_to(input_dir)
+            source_image = prev_dir / rel_path if prev_dir != input_dir else src_image
+            watermark_image = watermark_dir / rel_path
+            watermark_image.parent.mkdir(parents=True, exist_ok=True)
+            if not source_image.exists():
+                print(f"Skipping watermark step for {rel_path}: source image missing")
+                continue
+            try:
+                run_command(
+                    [
+                        sys.executable,
+                        "app/watermark_removal/remove_watermark.py",
+                        str(source_image),
+                        str(watermark_image),
+                    ],
+                    f"Step 4/4: Remove watermark from {rel_path}",
+                )
+            except RuntimeError as exc:
+                print(f"Warning: {exc}. Falling back to the prior image source.")
+                shutil.copy2(source_image, watermark_image)
+        prev_dir = watermark_dir
+    else:
+        print("Skipping watermark removal step")
 
     if resizing:
         run_command(

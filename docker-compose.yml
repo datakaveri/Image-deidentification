@@ -1,12 +1,21 @@
+# Local build / test compose for this repo.
+#
+# The TEE deployment compose (which pins the published GHCR image and mounts
+# /tmp/tee_input/... ) lives in the datakaveri/Docker-Compose repo, not here.
+# This file builds from source and points the same three container paths at the
+# working tree so the image can be exercised locally.
+#
+#   docker compose build
+#   docker compose run --rm skald-image
+#
+# Override the input/output on the fly:
+#   docker compose run --rm -v $(pwd)/train/images:/app/data:ro skald-image
+
 services:
-  road-defect-app:
+  skald-image:
     build: .
-    image: road-defect-anonymization
+    image: skald-image:dev
     volumes:
-      - ./train:/app/train
-      - ./outputs:/app/outputs
-      - ./app:/app/app
-    working_dir: /app
-    entrypoint: ["python"]
-    command: ["main.py", "--help"]
-    tty: true
+      - ./samples:/app/data:ro
+      - ./config:/app/config:ro
+      - ./outputs:/app/output
