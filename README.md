@@ -2,9 +2,9 @@
 
 This project builds an end-to-end image anonymization pipeline for road-defect datasets. The complete pipeline flow is:
 
-`EXIF cleaning` -> `watermark removal (EasyOCR-based)` -> `human masking` -> `license plate masking` -> `resizing`
+`decode once` -> `plate detection` -> `human detection` -> `watermark detection` -> `redactions` -> `resize in memory` -> `GPS-only EXIF save`
 
-The main entrypoint is [main.py](main.py), which runs the full sequence in one command.
+The main entrypoint is [main.py](main.py), which runs the full sequence in one command. Enabled models are loaded once and reused for every image; intermediate stage images are not written.
 
 ## Requirements
 
@@ -38,6 +38,25 @@ The pipeline supports configuration via `pipeline_config.json` and command-line 
 - `conf`, `imgsz`, `high_thresh`, `low_thresh`
 - `ext`
 - `exif_strip`, `watermark_removal`, `human_mask`, `plate_mask`, `resizing`
+
+### Reusable in-memory stage APIs
+
+The reusable stage functions are available from `app.deidentification`. They accept a decoded image for detection and return redacted image data without writing intermediate files:
+
+```python
+from app.deidentification import (
+  detect_human_mask,
+  detect_plate_boxes,
+  detect_watermark_regions,
+  redact_human_mask,
+  redact_plate_boxes,
+  redact_watermark_regions,
+  resize_for_quality,
+  save_with_geo_exif,
+)
+```
+
+The intended per-image order is: decode -> run the three detections -> apply the three redactions -> resize in memory -> save once with optional GPS-only EXIF preservation.
 
 Local run using config:
 
