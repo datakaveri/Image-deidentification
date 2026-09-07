@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+import time
 
 import cv2
 import easyocr
@@ -62,7 +63,11 @@ def save_image(path: Path, image: np.ndarray) -> None:
         raise RuntimeError(f"Could not write image: {path}")
 
 
-def detect_watermark_regions(image: np.ndarray, border_fraction: float = 0.15) -> list[tuple[int, int, int, int]]:
+def detect_watermark_regions(
+    image: np.ndarray,
+    reader: easyocr.Reader,
+    border_fraction: float = 0.15,
+) -> list[tuple[int, int, int, int]]:
     h, w = image.shape[:2]
     band_h = max(24, int(h * border_fraction))
     band_w = max(24, int(w * border_fraction))
@@ -75,7 +80,6 @@ def detect_watermark_regions(image: np.ndarray, border_fraction: float = 0.15) -
         (w - band_w, 0, w, h),
     ]
 
-    reader = easyocr.Reader(["en"], gpu=False)
     for x1, y1, x2, y2 in edge_slices:
         slice_img = image[y1:y2, x1:x2]
         if slice_img.size == 0:
@@ -94,12 +98,19 @@ def detect_watermark_regions(image: np.ndarray, border_fraction: float = 0.15) -
     return merge_bboxes(regions)
 
 
-def remove_bottom_watermark(input_path: str, output_path: str, detection_output_path: str | None = None) -> dict:
+def remove_bottom_watermark(
+    input_path: str,
+    output_path: str,
+    reader: easyocr.Reader,
+    detection_output_path: str | None = None,
+) -> dict:
     input_file = Path(input_path)
     output_file = Path(output_path)
 
     image = load_image(input_file)
-    regions = detect_watermark_regions(image, border_fraction=0.15)
+    detection_started_at = time.perf_counter()
+    regions = detect_watermark_regions(image, reader, border_fraction=0.15)
+    detection_seconds = time.perf_counter() - detection_started_at
 
     if detection_output_path is not None:
         detection_image = image.copy()
@@ -108,30 +119,83 @@ def remove_bottom_watermark(input_path: str, output_path: str, detection_output_
         save_image(Path(detection_output_path), detection_image)
 
     phi_regions = [{"bbox": (x1, y1, x2, y2), "zone": "anatomy"} for x1, y1, x2, y2 in regions]
+    redaction_started_at = time.perf_counter()
     cleaned, mask = redact_pixels(image, phi_regions, ds=None)
     save_image(output_file, cleaned)
+    redaction_seconds = time.perf_counter() - redaction_started_at
 
     return {
         "input": str(input_file),
         "output": str(output_file),
         "detections": len(phi_regions),
         "mask_pixels": int(np.sum(mask > 0)),
+        "detection_seconds": round(detection_seconds, 3),
+        "redaction_seconds": round(redaction_seconds, 3),
+        "total_seconds": round(detection_seconds + redaction_seconds, 3),
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Detect and remove bottom-edge watermark text from an image")
-    parser.add_argument("input_image", help="Path to the input image")
-    parser.add_argument("output_image", help="Path to save the cleaned image")
-    parser.add_argument(
-        "--detection-output",
-        dest="detection_output",
-        help="Optional path to save an image with the detected text boxes overlaid",
+def process_folder(input_dir: Path, output_dir: Path, reader: easyocr.Reader, extensions: tuple[str, ...]) -> None:
+    image_paths = sorted(
+        path
+        for extension in extensions
+        for path in input_dir.rglob(f"*.{extension}")
+        if path.is_file()
     )
+    if not image_paths:
+        raise SystemExit(f"No supported images found in {input_dir}")
+
+    detection_seconds_total = 0.0
+    redaction_seconds_total = 0.0
+    successful = 0
+    for image_path in image_paths:
+        relative_path = image_path.relative_to(input_dir)
+        output_path = output_dir / relative_path
+        try:
+            result = remove_bottom_watermark(str(image_path), str(output_path), reader)
+            detection_seconds = result["detection_seconds"]
+            redaction_seconds = result["redaction_seconds"]
+            detection_seconds_total += detection_seconds
+            redaction_seconds_total += redaction_seconds
+            successful += 1
+            print(
+                f"{relative_path}: Detection {detection_seconds:.3f}s;"
+                f" Redaction {redaction_seconds:.3f}s"
+            )
+        except Exception as exc:
+            print(f"Warning: failed to process {relative_path}: {exc}")
+
+    print(f"Processed {successful}/{len(image_paths)} images")
+    print(f"Detection time: {detection_seconds_total:.3f} seconds")
+    print(f"Redaction time: {redaction_seconds_total:.3f} seconds")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Detect and remove watermark text from an image folder")
+    parser.add_argument("input_dir", help="Directory containing input images")
+    parser.add_argument("output_dir", help="Directory to save cleaned images")
+    parser.add_argument("--ocr-langs", default="en", help="Comma-separated EasyOCR language codes")
+    parser.add_argument("--ext", default="jpg,jpeg,png,bmp,tif,tiff,webp", help="Comma-separated image extensions")
     args = parser.parse_args()
 
-    result = remove_bottom_watermark(args.input_image, args.output_image, args.detection_output)
-    print(result)
+    input_dir = Path(args.input_dir)
+    output_dir = Path(args.output_dir)
+    if not input_dir.is_dir():
+        raise SystemExit(f"Input directory not found: {input_dir}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    ocr_langs = [lang.strip() for lang in args.ocr_langs.split(",") if lang.strip()]
+    model_started_at = time.perf_counter()
+    reader = easyocr.Reader(ocr_langs, gpu=False)
+    model_seconds = time.perf_counter() - model_started_at
+    print(f"EasyOCR model loaded in {model_seconds:.3f} seconds")
+
+    process_folder(
+        input_dir,
+        output_dir,
+        reader,
+        tuple(extension.strip().lower().lstrip(".") for extension in args.ext.split(",") if extension.strip()),
+    )
 
 
 if __name__ == "__main__":

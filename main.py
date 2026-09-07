@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -119,15 +120,20 @@ def iter_image_files(folder: Path, extensions: Iterable[str]) -> list[Path]:
     return files
 
 
-def run_command(cmd: Sequence[str], description: str) -> None:
+def run_command(cmd: Sequence[str], description: str) -> float:
     print(f"\n== {description} ==")
     print("Running:", " ".join(cmd))
+    started_at = time.perf_counter()
     completed = subprocess.run(cmd, cwd=str(ROOT_DIR), check=False)
+    elapsed_seconds = time.perf_counter() - started_at
     if completed.returncode != 0:
         raise RuntimeError(f"{description} failed with exit code {completed.returncode}")
+    print(f"Completed in {elapsed_seconds:.3f} seconds")
+    return elapsed_seconds
 
 
 def main() -> None:
+    pipeline_started_at = time.perf_counter()
     parser = build_parser()
     args = parser.parse_args()
 
@@ -251,27 +257,17 @@ def main() -> None:
 
     # Step 4: Watermark removal
     if watermark_removal:
-        for src_image in image_files:
-            rel_path = src_image.relative_to(input_dir)
-            source_image = prev_dir / rel_path if prev_dir != input_dir else src_image
-            watermark_image = watermark_dir / rel_path
-            watermark_image.parent.mkdir(parents=True, exist_ok=True)
-            if not source_image.exists():
-                print(f"Skipping watermark step for {rel_path}: source image missing")
-                continue
-            try:
-                run_command(
-                    [
-                        sys.executable,
-                        "app/watermark_removal/remove_watermark.py",
-                        str(source_image),
-                        str(watermark_image),
-                    ],
-                    f"Step 4/4: Remove watermark from {rel_path}",
-                )
-            except RuntimeError as exc:
-                print(f"Warning: {exc}. Falling back to the prior image source.")
-                shutil.copy2(source_image, watermark_image)
+        run_command(
+            [
+                sys.executable,
+                "app/watermark_removal/remove_watermark.py",
+                str(prev_dir),
+                str(watermark_dir),
+                "--ext",
+                ",".join(extensions),
+            ],
+            "Step 4/4: Remove watermarks",
+        )
         prev_dir = watermark_dir
     else:
         print("Skipping watermark removal step")
@@ -297,7 +293,8 @@ def main() -> None:
         if prev_dir != output_dir:
             shutil.copytree(prev_dir, output_dir, dirs_exist_ok=True)
 
-    print("\nPipeline complete.")
+    total_seconds = time.perf_counter() - pipeline_started_at
+    print(f"\nPipeline complete in {total_seconds:.3f} seconds.")
     print(f"Final images saved to: {output_dir}")
     print(f"Intermediate outputs are in: {temp_dir}")
 

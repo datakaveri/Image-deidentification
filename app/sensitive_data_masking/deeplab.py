@@ -88,13 +88,14 @@ def load_model(device_name):
         device = torch.device(device_name)
     
     print(f"Loading DeepLabV3 ResNet50 model onto device: {device}...")
+    started_at = time.perf_counter()
     try:
         # Load weights
         weights = DeepLabV3_ResNet50_Weights.DEFAULT
         model = deeplabv3_resnet50(weights=weights)
         model.to(device)
         model.eval()
-        print("Model loaded successfully.")
+        print(f"Model loaded successfully in {time.perf_counter() - started_at:.3f} seconds.")
         return model, device
     except Exception as e:
         print(f"Error loading model: {e}")
@@ -192,6 +193,8 @@ def main():
     model, device = load_model(args.device)
     
     start_time = time.time()
+    detection_seconds_total = 0.0
+    redaction_seconds_total = 0.0
     successful = 0
     errors = 0
     
@@ -210,10 +213,11 @@ def main():
             # Open using PIL for torchvision transforms (RGB conversion)
             pil_img = Image.open(img_path).convert("RGB")
             
-            # Generate segmentation mask
+            detection_started_at = time.perf_counter()
             mask = get_sensitive_mask(model, device, pil_img, orig_shape, args.dilation)
+            detection_seconds = time.perf_counter() - detection_started_at
             
-            # Apply mask to image
+            redaction_started_at = time.perf_counter()
             mask_bool = mask > 0
             
             if np.any(mask_bool):
@@ -234,6 +238,14 @@ def main():
             
             # Save the image
             cv2.imwrite(out_img_path, img)
+            redaction_seconds = time.perf_counter() - redaction_started_at
+            detection_seconds_total += detection_seconds
+            redaction_seconds_total += redaction_seconds
+            print(
+                f" Detection: {detection_seconds:.3f}s;"
+                f" Redaction: {redaction_seconds:.3f}s",
+                end="",
+            )
             print(f" Done ({action_taken}).")
             successful += 1
             
@@ -248,6 +260,8 @@ def main():
     print(f"Successfully masked: {successful}")
     print(f"Errors occurred: {errors}")
     print(f"Time elapsed: {elapsed:.2f} seconds ({elapsed/max(1, len(image_paths)):.2f}s per image)")
+    print(f"Detection time: {detection_seconds_total:.2f} seconds ({detection_seconds_total/max(1, successful):.2f}s per successful image)")
+    print(f"Redaction time: {redaction_seconds_total:.2f} seconds ({redaction_seconds_total/max(1, successful):.2f}s per successful image)")
     print(f"Output files saved in: {os.path.abspath(args.output_dir)}")
     print("-" * 50)
 

@@ -9,6 +9,7 @@ import argparse
 import csv
 import os
 import sys
+import time
 from glob import glob
 from pathlib import Path
 
@@ -79,32 +80,41 @@ def process_image(model, img_path: Path, out_path: Path, conf: float, imgsz: int
     if img is None:
         return ""
 
-    # run inference
+    detection_started_at = time.perf_counter()
     results = model.predict(source=str(img_path), conf=conf, imgsz=imgsz, device=device, verbose=False)
     if not results:
         ensure_dir(str(out_path.parent))
+        detection_seconds = time.perf_counter() - detection_started_at
+        redaction_started_at = time.perf_counter()
         cv2.imwrite(str(out_path), img)
-        return ""
+        redaction_seconds = time.perf_counter() - redaction_started_at
+        return {"plate_text": "", "detection_seconds": detection_seconds, "redaction_seconds": redaction_seconds}
 
     # take first (and only) result
     r = results[0]
     boxes = getattr(r, 'boxes', None)
     if boxes is None or len(boxes) == 0:
         ensure_dir(str(out_path.parent))
+        detection_seconds = time.perf_counter() - detection_started_at
+        redaction_started_at = time.perf_counter()
         cv2.imwrite(str(out_path), img)
-        return ""
+        redaction_seconds = time.perf_counter() - redaction_started_at
+        return {"plate_text": "", "detection_seconds": detection_seconds, "redaction_seconds": redaction_seconds}
 
     xyxy = boxes.xyxy.cpu().numpy() if hasattr(boxes, 'xyxy') else []
     cls = boxes.cls.cpu().numpy() if hasattr(boxes, 'cls') else None
     names = getattr(r, 'names', None)
 
     plate_texts = []
+    selected_boxes = []
     for i, box in enumerate(xyxy):
         if allowed_classes is not None and cls is not None and names is not None:
             label = str(names[int(cls[i])]).lower()
             label_norm = label.replace('_', ' ')
             if label not in allowed_classes and label_norm not in allowed_classes:
                 continue
+
+        selected_boxes.append(box)
 
         if ocr_reader is not None:
             x1, y1, x2, y2 = [int(v) for v in box]
@@ -113,11 +123,19 @@ def process_image(model, img_path: Path, out_path: Path, conf: float, imgsz: int
             if text:
                 plate_texts.append(text)
 
+    detection_seconds = time.perf_counter() - detection_started_at
+    redaction_started_at = time.perf_counter()
+    for box in selected_boxes:
         mask_box(img, box, mode=mode)
 
     ensure_dir(str(out_path.parent))
     cv2.imwrite(str(out_path), img)
-    return " | ".join(plate_texts)
+    redaction_seconds = time.perf_counter() - redaction_started_at
+    return {
+        "plate_text": " | ".join(plate_texts),
+        "detection_seconds": detection_seconds,
+        "redaction_seconds": redaction_seconds,
+    }
 
 
 def main():
@@ -156,7 +174,9 @@ def main():
             device = 'cpu'
 
     print(f"Loading model on device={device}...")
+    model_started_at = time.perf_counter()
     model = YOLO(weights)
+    print(f"YOLO model loaded in {time.perf_counter() - model_started_at:.3f} seconds")
 
     ocr_reader = None
     if args.ocr:
@@ -164,7 +184,9 @@ def main():
             print("Missing dependency: easyocr. Install it with 'pip install easyocr'")
             sys.exit(1)
         ocr_langs = [lang.strip() for lang in args.ocr_langs.split(',') if lang.strip()]
+        ocr_started_at = time.perf_counter()
         ocr_reader = easyocr.Reader(ocr_langs, gpu=(device != 'cpu' and torch.cuda.is_available()))
+        print(f"EasyOCR model loaded in {time.perf_counter() - ocr_started_at:.3f} seconds")
 
     exts = [e.strip().lower() for e in args.ext.split(',') if e.strip()]
     files = []
@@ -187,13 +209,15 @@ def main():
         csv_writer.writerow(["image_name", "plate_text"])
 
     print(f"Processing {len(files)} images -> {out_dir} (mode={args.mode})")
+    detection_seconds_total = 0.0
+    redaction_seconds_total = 0.0
 
     for f in tqdm(files, desc="images"):
         rel = Path(f).relative_to(src_dir)
         out_path = out_dir / rel
         plate_text = ""
         try:
-            plate_text = process_image(
+            timing = process_image(
                 model,
                 Path(f),
                 out_path,
@@ -203,6 +227,15 @@ def main():
                 device=device,
                 ocr_reader=ocr_reader,
                 allowed_classes=allowed_classes,
+            )
+            plate_text = timing["plate_text"]
+            detection_seconds = timing["detection_seconds"]
+            redaction_seconds = timing["redaction_seconds"]
+            detection_seconds_total += detection_seconds
+            redaction_seconds_total += redaction_seconds
+            print(
+                f" {rel.as_posix()}: Detection {detection_seconds:.3f}s;"
+                f" Redaction {redaction_seconds:.3f}s"
             )
         except Exception as e:
             print(f"Warning: failed to process {f}: {e}")
@@ -214,6 +247,8 @@ def main():
         csv_handle.close()
         print("Done. CSV saved to:", csv_path)
 
+    print(f"Detection time: {detection_seconds_total:.2f} seconds ({detection_seconds_total/max(1, len(files)):.2f}s per image)")
+    print(f"Redaction time: {redaction_seconds_total:.2f} seconds ({redaction_seconds_total/max(1, len(files)):.2f}s per image)")
     print("Done. Masked images saved to:", out_dir)
 
 

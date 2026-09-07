@@ -2,7 +2,7 @@
 
 This project builds an end-to-end image anonymization pipeline for road-defect datasets. The complete pipeline flow is:
 
-`EXIF cleaning` -> `watermark removal (EasyOCR-based)` -> `human masking` -> `license plate masking` -> `resizing`
+`EXIF cleaning` -> `license plate masking` -> `human masking` -> `watermark removal (EasyOCR-based)` -> `resizing`
 
 The main entrypoint is [main.py](main.py), which runs the full sequence in one command.
 
@@ -55,6 +55,7 @@ python main.py --config pipeline_config.json --ocr --mask-mode blur
 
 - Intermediate outputs are written under temp-dir named folder for debugging
 - Final resized images are written under output-dir named folder
+- Each pipeline step reports its elapsed time. DeepLab human masking and YOLO plate masking report detection and redaction times separately, both per image and as totals. Watermark processing also reports EasyOCR detection and pixel redaction times separately.
 
 ## Run the full pipeline
 
@@ -87,32 +88,12 @@ python app/exif_geo_tag/store_geo_tag_exif.py \
   --recursive
 ```
 
-### 2. Remove watermark (EasyOCR-based)
-
-```bash
-python app/watermark_removal/remove_watermark.py \
-  app/watermark_removal/IMG20260730125027.jpg \
-  outputs/cleaned.jpg \
-  --detection-output outputs/detection_boxes.jpg
-```
-
-The above step uses EasyOCR to detect text regions in the image border before redacting watermark text.
-
-### 3. Mask humans with DeepLab
-
-```bash
-python app/sensitive_data_masking/deeplab.py \
-  --input-dir outputs/temp/watermark_removed \
-  --output-dir outputs/temp/human_masked \
-  --mask-type blur
-```
-
-### 4. Mask license plates
+### 2. Mask license plates
 
 ```bash
 python app/sensitive_data_masking/mask_plates.py \
   --weights app/sensitive_data_masking/license_plate_detector.pt \
-  --source outputs/temp/human_masked \
+  --source outputs/temp/exif \
   --out outputs/temp/plate_masked \
   --mode black \
   --ocr \
@@ -123,6 +104,27 @@ python app/sensitive_data_masking/mask_plates.py \
   --imgsz 640 \
   --classes "license plate,number plate,plate"
 ```
+
+### 3. Mask humans with DeepLab
+
+```bash
+python app/sensitive_data_masking/deeplab.py \
+  --input-dir outputs/temp/plate_masked \
+  --output-dir outputs/temp/human_masked \
+  --mask-type blur
+```
+
+### 4. Remove watermark (EasyOCR-based)
+
+```bash
+python app/watermark_removal/remove_watermark.py \
+  outputs/temp/human_masked \
+  outputs/temp/watermark_removed \
+  --ocr-langs en \
+  --ext jpg,jpeg,png
+```
+
+The above step uses one EasyOCR model instance for the whole folder, detecting text regions in image borders before redacting watermark text. It reports model loading, detection, and redaction times.
 
 ### 5. Resize images
 
