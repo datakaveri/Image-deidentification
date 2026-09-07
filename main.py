@@ -1,6 +1,316 @@
 #!/usr/bin/env python3
-"""End-to-end anonymization pipeline for road-defect image datasets."""
+#"""Configuration-driven in-memory road-defect anonymization pipeline."""
 
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import time
+from pathlib import Path
+from typing import Any, Iterable
+import cv2
+
+from app.deidentification import (
+    detect_human_mask,
+    detect_plate_boxes,
+    detect_watermark_regions,
+    redact_human_mask,
+    redact_plate_boxes,
+    redact_watermark_regions,
+    resize_for_quality,
+    save_with_geo_exif,
+)
+
+ROOT_DIR = Path(__file__).resolve().parent
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "input_dir": os.environ.get("SKALD_DATA_DIR", "train/images"),
+    "output_dir": os.environ.get("SKALD_OUTPUT_DIR", "outputs/final"),
+    "temp_dir": os.environ.get("SKALD_TEMP_DIR", "outputs/temp"),
+    "weights": "app/sensitive_data_masking/license_plate_detector.pt",
+    "device": "auto",
+    "mask_mode": "black",
+    "ocr": False,
+    "ocr_langs": "en",
+    "conf": 0.1,
+    "imgsz": 640,
+    "high_thresh": 500.0,
+    "low_thresh": 100.0,
+    "ext": "jpg,jpeg,png,bmp,tif,tiff,webp",
+    "exif_strip": True,
+    "watermark_removal": True,
+    "human_mask": True,
+    "plate_mask": True,
+    "resizing": True,
+}
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Run EXIF-aware in-memory anonymization: plate -> human -> watermark -> resize -> save"
+    )
+    parser.add_argument("--config", default="pipeline_config.json")
+    parser.add_argument("--input-dir", default=None)
+    parser.add_argument("--output-dir", default=None)
+    parser.add_argument("--temp-dir", default=None)
+    parser.add_argument("--weights", default=None)
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--mask-mode", default=None, choices=["black", "blur", "pixelate"])
+    parser.add_argument("--ocr", action="store_true", default=None)
+    parser.add_argument("--ocr-langs", default=None)
+    parser.add_argument("--conf", type=float, default=None)
+    parser.add_argument("--imgsz", type=int, default=None)
+    parser.add_argument("--high-thresh", type=float, default=None)
+    parser.add_argument("--low-thresh", type=float, default=None)
+    parser.add_argument("--ext", default=None)
+    for name in ("exif_strip", "watermark_removal", "human_mask", "plate_mask", "resizing"):
+        parser.add_argument(f"--{name.replace('_', '-')}", dest=name, action="store_true", default=None)
+        parser.add_argument(f"--no-{name.replace('_', '-')}", dest=name, action="store_false")
+    return parser
+
+def load_config(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise ValueError(f"Config file must contain a JSON object: {path}")
+    return data
+
+def resolve(cli_value: Any, config: dict[str, Any], key: str) -> Any:
+    if cli_value is not None:
+        return cli_value
+    return config.get(key, DEFAULT_CONFIG[key])
+
+def resolve_path(value: Any) -> Path:
+    path = Path(str(value)).expanduser()
+    return path if path.is_absolute() else (ROOT_DIR / path).resolve()
+
+def iter_image_files(folder: Path, extensions: Iterable[str]) -> list[Path]:
+    allowed = {extension.lower().lstrip(".") for extension in extensions}
+    return sorted(
+        path for path in folder.rglob("*")
+        if path.is_file() and path.suffix.lower().lstrip(".") in allowed
+    )
+
+def load_models(
+    plate_mask: bool,
+    human_mask: bool,
+    watermark_removal: bool,
+    ocr: bool,
+    weights: Path,
+    device_name: str,
+    ocr_langs: str,
+) -> tuple[Any, Any, Any, Any, dict[str, float]]:
+    load_times: dict[str, float] = {}
+    yolo_model = None
+    deeplab_model = None
+    deeplab_device = None
+    ocr_reader = None
+
+    import torch
+
+    if device_name == "auto":
+        resolved_device = "cuda" if torch.cuda.is_available() else "cpu"
+    else:
+        resolved_device = device_name
+    if resolved_device.startswith("cuda") and not torch.cuda.is_available():
+        resolved_device = "cpu"
+
+    if plate_mask:
+        from ultralytics import YOLO
+
+        started = time.perf_counter()
+        yolo_model = YOLO(str(weights))
+        load_times["yolo_model_load_seconds"] = time.perf_counter() - started
+
+    if human_mask:
+        from torchvision.models.segmentation import DeepLabV3_ResNet50_Weights, deeplabv3_resnet50
+
+        started = time.perf_counter()
+        deeplab_device = torch.device(resolved_device)
+        deeplab_model = deeplabv3_resnet50(weights=DeepLabV3_ResNet50_Weights.DEFAULT)
+        deeplab_model.to(deeplab_device)
+        deeplab_model.eval()
+        load_times["deeplab_model_load_seconds"] = time.perf_counter() - started
+
+    if watermark_removal or (plate_mask and ocr):
+        import easyocr
+
+        started = time.perf_counter()
+        languages = [lang.strip() for lang in ocr_langs.split(",") if lang.strip()]
+        ocr_reader = easyocr.Reader(languages, gpu=resolved_device.startswith("cuda"))
+        load_times["easyocr_model_load_seconds"] = time.perf_counter() - started
+
+    return yolo_model, deeplab_model, deeplab_device, ocr_reader, load_times
+
+def process_image(
+    source_path: Path,
+    output_path: Path,
+    models: tuple[Any, Any, Any, Any],
+    settings: dict[str, Any],
+) -> dict[str, Any]:
+    yolo_model, deeplab_model, deeplab_device, ocr_reader = models
+    image = cv2.imread(str(source_path), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError(f"Could not read image: {source_path}")
+
+    timings: dict[str, float] = {}
+    detections: dict[str, Any] = {}
+
+    if settings["plate_mask"]:
+        started = time.perf_counter()
+        detections["plates"] = detect_plate_boxes(
+            yolo_model,
+            image,
+            settings["conf"],
+            settings["imgsz"],
+            settings["device"],
+            ocr_reader if settings["ocr"] else None,
+            {"license plate", "number plate", "plate"},
+        )
+        timings["plate_detection_seconds"] = time.perf_counter() - started
+
+    if settings["human_mask"]:
+        started = time.perf_counter()
+        detections["human_mask"] = detect_human_mask(
+            deeplab_model, deeplab_device, image, dilation_size=5
+        )
+        timings["human_detection_seconds"] = time.perf_counter() - started
+
+    if settings["watermark_removal"]:
+        started = time.perf_counter()
+        detections["watermarks"] = detect_watermark_regions(image, ocr_reader)
+        timings["watermark_detection_seconds"] = time.perf_counter() - started
+
+    if settings["plate_mask"]:
+        started = time.perf_counter()
+        image = redact_plate_boxes(image, detections["plates"], settings["mask_mode"])
+        timings["plate_redaction_seconds"] = time.perf_counter() - started
+
+    if settings["human_mask"]:
+        started = time.perf_counter()
+        image = redact_human_mask(image, detections["human_mask"], "blur")
+        timings["human_redaction_seconds"] = time.perf_counter() - started
+
+    if settings["watermark_removal"]:
+        started = time.perf_counter()
+        image = redact_watermark_regions(image, detections["watermarks"])
+        timings["watermark_redaction_seconds"] = time.perf_counter() - started
+
+    if settings["resizing"]:
+        started = time.perf_counter()
+        image, quality, quality_score = resize_for_quality(
+            image, settings["high_thresh"], settings["low_thresh"]
+        )
+        timings["resize_seconds"] = time.perf_counter() - started
+    else:
+        quality, quality_score = "UNCHANGED", None
+
+    started = time.perf_counter()
+    save_with_geo_exif(image, source_path, output_path, settings["exif_strip"])
+    timings["save_seconds"] = time.perf_counter() - started
+
+    plate_text = " | ".join(
+        detection.text for detection in detections.get("plates", []) if detection.text
+    )
+    return {
+        "image_name": str(source_path),
+        "plate_text": plate_text,
+        "quality": quality,
+        "quality_score": quality_score,
+        **timings,
+    }
+
+def main() -> None:
+    started = time.perf_counter()
+    args = build_parser().parse_args()
+    config_path = resolve_path(args.config)
+    config = {**DEFAULT_CONFIG, **load_config(config_path)}
+
+    input_dir = resolve_path(resolve(args.input_dir, config, "input_dir"))
+    output_dir = resolve_path(resolve(args.output_dir, config, "output_dir"))
+    temp_dir = resolve_path(resolve(args.temp_dir, config, "temp_dir"))
+    extensions = str(resolve(args.ext, config, "ext")).split(",")
+    image_files = iter_image_files(input_dir, extensions)
+    if not input_dir.is_dir():
+        raise SystemExit(f"Input directory not found: {input_dir}")
+    if not image_files:
+        raise SystemExit(f"No supported images found in {input_dir}")
+
+    settings = {
+        "weights": resolve_path(resolve(args.weights, config, "weights")),
+        "device": str(resolve(args.device, config, "device")),
+        "mask_mode": str(resolve(args.mask_mode, config, "mask_mode")),
+        "ocr": bool(resolve(args.ocr, config, "ocr")),
+        "ocr_langs": str(resolve(args.ocr_langs, config, "ocr_langs")),
+        "conf": float(resolve(args.conf, config, "conf")),
+        "imgsz": int(resolve(args.imgsz, config, "imgsz")),
+        "high_thresh": float(resolve(args.high_thresh, config, "high_thresh")),
+        "low_thresh": float(resolve(args.low_thresh, config, "low_thresh")),
+        "exif_strip": bool(resolve(args.exif_strip, config, "exif_strip")),
+        "watermark_removal": bool(resolve(args.watermark_removal, config, "watermark_removal")),
+        "human_mask": bool(resolve(args.human_mask, config, "human_mask")),
+        "plate_mask": bool(resolve(args.plate_mask, config, "plate_mask")),
+        "resizing": bool(resolve(args.resizing, config, "resizing")),
+    }
+
+    if settings["device"] == "auto":
+        import torch
+
+        settings["device"] = "cuda" if torch.cuda.is_available() else "cpu"
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    models_started = time.perf_counter()
+    model_objects = load_models(
+        settings["plate_mask"], settings["human_mask"], settings["watermark_removal"],
+        settings["ocr"], settings["weights"], settings["device"], settings["ocr_langs"],
+    )
+    yolo_model, deeplab_model, deeplab_device, ocr_reader, model_times = model_objects
+    print(f"Loaded enabled models in {time.perf_counter() - models_started:.3f} seconds")
+    for name, seconds in model_times.items():
+        print(f"{name}: {seconds:.3f} seconds")
+
+    csv_path = temp_dir / "plate_results.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["image_name", "plate_text"])
+        successful = 0
+        errors = 0
+        for index, source_path in enumerate(image_files, 1):
+            relative_path = source_path.relative_to(input_dir)
+            output_path = output_dir / relative_path
+            print(f"[{index}/{len(image_files)}] Processing {relative_path}")
+            try:
+                result = process_image(
+                    source_path,
+                    output_path,
+                    (yolo_model, deeplab_model, deeplab_device, ocr_reader),
+                    settings,
+                )
+                writer.writerow([relative_path.as_posix(), result["plate_text"]])
+                timing_text = "; ".join(
+                    f"{key}={value:.3f}s" for key, value in result.items() if key.endswith("seconds")
+                )
+                print(f"  {timing_text}")
+                successful += 1
+            except Exception as exc:
+                errors += 1
+                writer.writerow([relative_path.as_posix(), ""])
+                print(f"  Failed: {exc}")
+
+    total_seconds = time.perf_counter() - started
+    print(f"Processed: {len(image_files)} | Successful: {successful} | Errors: {errors}")
+    print(f"Pipeline complete in {total_seconds:.3f} seconds")
+    print(f"Final images saved to: {output_dir}")
+    print(f"Plate results saved to: {csv_path}")
+
+if __name__ == "__main__":
+    main()
+
+"""
 from __future__ import annotations
 
 import argparse
@@ -304,3 +614,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+"""
