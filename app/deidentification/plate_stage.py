@@ -8,7 +8,7 @@ import numpy as np
 from .contracts import PlateDetection
 
 
-def _ocr_plate_text(reader: Any, roi: np.ndarray) -> str:
+def _ocr_plate_text(reader: Any, roi: np.ndarray, reader_lock: Any = None) -> str:
     if reader is None or roi.size == 0:
         return ""
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -17,7 +17,11 @@ def _ocr_plate_text(reader: Any, roi: np.ndarray) -> str:
         scale = max(1, 128 // min(height, width))
         gray = cv2.resize(gray, (width * scale, height * scale), interpolation=cv2.INTER_CUBIC)
     try:
-        texts = reader.readtext(gray, detail=0, paragraph=False)
+        if reader_lock is None:
+            texts = reader.readtext(gray, detail=0, paragraph=False)
+        else:
+            with reader_lock:
+                texts = reader.readtext(gray, detail=0, paragraph=False)
     except Exception:
         return ""
     return " | ".join(text.strip() for text in texts if isinstance(text, str) and text.strip())
@@ -31,6 +35,7 @@ def detect_plate_boxes(
     device: str,
     ocr_reader: Any = None,
     allowed_classes: Iterable[str] | None = None,
+    reader_lock: Any = None,
 ) -> list[PlateDetection]:
     """Detect plates without modifying or writing the supplied image."""
     allowed = {value.strip().lower().replace("_", " ") for value in allowed_classes} if allowed_classes else None
@@ -57,7 +62,7 @@ def detect_plate_boxes(
                 continue
         coordinates = tuple(int(value) for value in box)
         x1, y1, x2, y2 = coordinates
-        text = _ocr_plate_text(ocr_reader, image[y1:y2, x1:x2])
+        text = _ocr_plate_text(ocr_reader, image[y1:y2, x1:x2], reader_lock)
         confidence = float(confidences[index]) if confidences is not None else None
         detections.append(PlateDetection(coordinates, text, confidence, class_name))
 

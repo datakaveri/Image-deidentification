@@ -16,5 +16,7 @@
   "watermark_removal": true,
   "human_mask": true,
   "plate_mask": true,
-  "resizing": true
+  "resizing": true,
+  "parallel_detections": true,
+  "compare_sequential": false
 }

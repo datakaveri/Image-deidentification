@@ -33,6 +33,7 @@ def detect_watermark_regions(
     reader: Any,
     border_fraction: float = 0.15,
     padding_fraction: float = 0.03,
+    reader_lock: Any = None,
 ) -> list[tuple[int, int, int, int]]:
     """Detect border text using a caller-owned EasyOCR reader."""
     height, width = image.shape[:2]
@@ -42,7 +43,11 @@ def detect_watermark_regions(
     padding = max(8, int(min(height, width) * padding_fraction))
     regions = []
     for x1, y1, x2, y2 in slices:
-        results = reader.readtext(image[y1:y2, x1:x2])
+        if reader_lock is None:
+            results = reader.readtext(image[y1:y2, x1:x2])
+        else:
+            with reader_lock:
+                results = reader.readtext(image[y1:y2, x1:x2])
         for box, _, _ in results:
             bx1, by1 = int(box[0][0]), int(box[0][1])
             bx2, by2 = int(box[2][0]), int(box[2][1])
