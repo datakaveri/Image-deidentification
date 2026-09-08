@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Iterable
 import cv2
+import numpy as np
 
 from app.deidentification import (
     detect_human_mask,
@@ -44,6 +48,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "human_mask": True,
     "plate_mask": True,
     "resizing": True,
+    "parallel_detections": True,
+    "compare_sequential": False,
 }
 
 def build_parser() -> argparse.ArgumentParser:
@@ -64,6 +70,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--high-thresh", type=float, default=None)
     parser.add_argument("--low-thresh", type=float, default=None)
     parser.add_argument("--ext", default=None)
+    parser.add_argument("--parallel-detections", dest="parallel_detections", action="store_true", default=None)
+    parser.add_argument("--no-parallel-detections", dest="parallel_detections", action="store_false")
+    parser.add_argument("--compare-sequential", dest="compare_sequential", action="store_true", default=None)
     for name in ("exif_strip", "watermark_removal", "human_mask", "plate_mask", "resizing"):
         parser.add_argument(f"--{name.replace('_', '-')}", dest=name, action="store_true", default=None)
         parser.add_argument(f"--no-{name.replace('_', '-')}", dest=name, action="store_false")
@@ -140,10 +149,68 @@ def load_models(
 
         started = time.perf_counter()
         languages = [lang.strip() for lang in ocr_langs.split(",") if lang.strip()]
-        ocr_reader = easyocr.Reader(languages, gpu=resolved_device.startswith("cuda"))
+        ocr_reader = easyocr.Reader(languages, gpu=False)
         load_times["easyocr_model_load_seconds"] = time.perf_counter() - started
 
     return yolo_model, deeplab_model, deeplab_device, ocr_reader, load_times
+
+
+def run_detections(image: Any, models: tuple[Any, Any, Any, Any], settings: dict[str, Any]) -> tuple[dict[str, Any], dict[str, float], str]:
+    yolo_model, deeplab_model, deeplab_device, ocr_reader = models
+    detections: dict[str, Any] = {}
+    timings: dict[str, float] = {}
+    started = time.perf_counter()
+    reader_lock = threading.Lock()
+
+    def detect_plates() -> list[Any]:
+        item_started = time.perf_counter()
+        result = detect_plate_boxes(yolo_model, image, settings["conf"], settings["imgsz"], settings["device"], ocr_reader if settings["ocr"] else None, {"license plate", "number plate", "plate"}, reader_lock)
+        timings["plate_detection_seconds"] = time.perf_counter() - item_started
+        return result
+
+    def detect_humans() -> Any:
+        item_started = time.perf_counter()
+        result = detect_human_mask(deeplab_model, deeplab_device, image, dilation_size=5)
+        timings["human_detection_seconds"] = time.perf_counter() - item_started
+        return result
+
+    def detect_watermarks() -> list[Any]:
+        item_started = time.perf_counter()
+        result = detect_watermark_regions(image, ocr_reader, reader_lock=reader_lock)
+        timings["watermark_detection_seconds"] = time.perf_counter() - item_started
+        return result
+
+    tasks = {}
+    if settings["plate_mask"]:
+        tasks["plates"] = detect_plates
+    if settings["human_mask"]:
+        tasks["human_mask"] = detect_humans
+    if settings["watermark_removal"]:
+        tasks["watermarks"] = detect_watermarks
+
+    cuda_mode = settings["device"].startswith("cuda")
+    if not settings["parallel_detections"] or len(tasks) < 2:
+        parallel_mode = "sequential"
+        for name, task in tasks.items():
+            detections[name] = task()
+    elif cuda_mode:
+        parallel_mode = "watermark_parallel_with_models"
+        watermark_task = tasks.pop("watermarks", None)
+        with ThreadPoolExecutor(max_workers=2 if watermark_task else 1) as executor:
+            watermark_future = executor.submit(watermark_task) if watermark_task else None
+            for name, task in tasks.items():
+                detections[name] = task()
+            if watermark_future is not None:
+                detections["watermarks"] = watermark_future.result()
+    else:
+        parallel_mode = "all_detectors_parallel"
+        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+            futures = {name: executor.submit(task) for name, task in tasks.items()}
+            for name, future in futures.items():
+                detections[name] = future.result()
+
+    timings["detection_wall_seconds"] = time.perf_counter() - started
+    return detections, timings, parallel_mode
 
 def process_image(
     source_path: Path,
@@ -156,33 +223,15 @@ def process_image(
     if image is None:
         raise ValueError(f"Could not read image: {source_path}")
 
-    timings: dict[str, float] = {}
-    detections: dict[str, Any] = {}
-
-    if settings["plate_mask"]:
-        started = time.perf_counter()
-        detections["plates"] = detect_plate_boxes(
-            yolo_model,
-            image,
-            settings["conf"],
-            settings["imgsz"],
-            settings["device"],
-            ocr_reader if settings["ocr"] else None,
-            {"license plate", "number plate", "plate"},
+    detections, timings, parallel_mode = run_detections(image, models, settings)
+    if settings["compare_sequential"] and parallel_mode != "sequential":
+        sequential_settings = {**settings, "parallel_detections": False}
+        sequential_detections, _, _ = run_detections(image, models, sequential_settings)
+        timings["detection_equivalent"] = float(
+            detections.get("plates", []) == sequential_detections.get("plates", [])
+            and np.array_equal(detections.get("human_mask"), sequential_detections.get("human_mask"))
+            and detections.get("watermarks", []) == sequential_detections.get("watermarks", [])
         )
-        timings["plate_detection_seconds"] = time.perf_counter() - started
-
-    if settings["human_mask"]:
-        started = time.perf_counter()
-        detections["human_mask"] = detect_human_mask(
-            deeplab_model, deeplab_device, image, dilation_size=5
-        )
-        timings["human_detection_seconds"] = time.perf_counter() - started
-
-    if settings["watermark_removal"]:
-        started = time.perf_counter()
-        detections["watermarks"] = detect_watermark_regions(image, ocr_reader)
-        timings["watermark_detection_seconds"] = time.perf_counter() - started
 
     if settings["plate_mask"]:
         started = time.perf_counter()
@@ -211,6 +260,8 @@ def process_image(
     started = time.perf_counter()
     save_with_geo_exif(image, source_path, output_path, settings["exif_strip"])
     timings["save_seconds"] = time.perf_counter() - started
+    with output_path.open("rb") as output_file:
+        output_sha256 = hashlib.sha256(output_file.read()).hexdigest()
 
     plate_text = " | ".join(
         detection.text for detection in detections.get("plates", []) if detection.text
@@ -220,6 +271,11 @@ def process_image(
         "plate_text": plate_text,
         "quality": quality,
         "quality_score": quality_score,
+        "parallel_mode": parallel_mode,
+        "plate_detection_count": len(detections.get("plates", [])),
+        "human_detection_count": int((detections.get("human_mask", 0) > 0).sum()) if "human_mask" in detections else 0,
+        "watermark_detection_count": len(detections.get("watermarks", [])),
+        "output_sha256": output_sha256,
         **timings,
     }
 
@@ -254,6 +310,8 @@ def main() -> None:
         "human_mask": bool(resolve(args.human_mask, config, "human_mask")),
         "plate_mask": bool(resolve(args.plate_mask, config, "plate_mask")),
         "resizing": bool(resolve(args.resizing, config, "resizing")),
+        "parallel_detections": bool(resolve(args.parallel_detections, config, "parallel_detections")),
+        "compare_sequential": bool(resolve(args.compare_sequential, config, "compare_sequential")),
     }
 
     if settings["device"] == "auto":
@@ -272,6 +330,12 @@ def main() -> None:
     print(f"Loaded enabled models in {time.perf_counter() - models_started:.3f} seconds")
     for name, seconds in model_times.items():
         print(f"{name}: {seconds:.3f} seconds")
+    import torch
+
+    if settings["device"].startswith("cuda") and torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+    processing_started = time.perf_counter()
+    cpu_started = time.process_time()
 
     csv_path = temp_dir / "plate_results.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
@@ -279,6 +343,10 @@ def main() -> None:
         writer.writerow(["image_name", "plate_text"])
         successful = 0
         errors = 0
+        total_plate_detections = 0
+        total_human_mask_pixels = 0
+        total_watermark_detections = 0
+        equivalent_images = 0
         for index, source_path in enumerate(image_files, 1):
             relative_path = source_path.relative_to(input_dir)
             output_path = output_dir / relative_path
@@ -291,6 +359,10 @@ def main() -> None:
                     settings,
                 )
                 writer.writerow([relative_path.as_posix(), result["plate_text"]])
+                total_plate_detections += result["plate_detection_count"]
+                total_human_mask_pixels += result["human_detection_count"]
+                total_watermark_detections += result["watermark_detection_count"]
+                equivalent_images += int(result.get("detection_equivalent", False))
                 timing_text = "; ".join(
                     f"{key}={value:.3f}s" for key, value in result.items() if key.endswith("seconds")
                 )
@@ -303,6 +375,18 @@ def main() -> None:
 
     total_seconds = time.perf_counter() - started
     print(f"Processed: {len(image_files)} | Successful: {successful} | Errors: {errors}")
+    processing_wall_seconds = time.perf_counter() - processing_started
+    cpu_utilization = (time.process_time() - cpu_started) / max(processing_wall_seconds, 1e-9)
+    cpu_utilization = cpu_utilization / max(os.cpu_count() or 1, 1) * 100.0
+    peak_gpu_mb = 0.0
+    if settings["device"].startswith("cuda") and torch.cuda.is_available():
+        peak_gpu_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
+    print(f"Detection counts: plates={total_plate_detections}; human_mask_pixels={total_human_mask_pixels}; watermarks={total_watermark_detections}")
+    if settings["compare_sequential"]:
+        print(f"Parallel/sequential detection equivalence: {equivalent_images}/{successful} images")
+    print(f"CPU utilization during image processing: {cpu_utilization:.1f}%")
+    print(f"Peak GPU memory allocated: {peak_gpu_mb:.1f} MB")
+    print(f"Image processing wall time: {processing_wall_seconds:.3f} seconds")
     print(f"Pipeline complete in {total_seconds:.3f} seconds")
     print(f"Final images saved to: {output_dir}")
     print(f"Plate results saved to: {csv_path}")
