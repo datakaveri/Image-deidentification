@@ -10,7 +10,8 @@ import json
 import os
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+import multiprocessing as mp
 from pathlib import Path
 from typing import Any, Iterable
 import cv2
@@ -20,6 +21,7 @@ from app.deidentification import (
     detect_human_mask,
     detect_plate_boxes,
     detect_watermark_regions,
+    extract_geo_exif,
     redact_human_mask,
     redact_plate_boxes,
     redact_watermark_regions,
@@ -28,6 +30,8 @@ from app.deidentification import (
 )
 
 ROOT_DIR = Path(__file__).resolve().parent
+_WORKER_MODELS: tuple[Any, Any, Any, Any] | None = None
+_WORKER_SETTINGS: dict[str, Any] | None = None
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "input_dir": os.environ.get("SKALD_DATA_DIR", "train/images"),
@@ -48,8 +52,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "human_mask": True,
     "plate_mask": True,
     "resizing": True,
-    "parallel_detections": True,
-    "compare_sequential": False,
+    "workers": 0,
+    "max_gpu_workers": 1,
+    "worker_start_method": "spawn",
 }
 
 def build_parser() -> argparse.ArgumentParser:
@@ -70,9 +75,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--high-thresh", type=float, default=None)
     parser.add_argument("--low-thresh", type=float, default=None)
     parser.add_argument("--ext", default=None)
-    parser.add_argument("--parallel-detections", dest="parallel_detections", action="store_true", default=None)
-    parser.add_argument("--no-parallel-detections", dest="parallel_detections", action="store_false")
-    parser.add_argument("--compare-sequential", dest="compare_sequential", action="store_true", default=None)
+    parser.add_argument("--workers", type=int, default=None)
+    parser.add_argument("--max-gpu-workers", type=int, default=None)
     for name in ("exif_strip", "watermark_removal", "human_mask", "plate_mask", "resizing"):
         parser.add_argument(f"--{name.replace('_', '-')}", dest=name, action="store_true", default=None)
         parser.add_argument(f"--no-{name.replace('_', '-')}", dest=name, action="store_false")
@@ -189,7 +193,7 @@ def run_detections(image: Any, models: tuple[Any, Any, Any, Any], settings: dict
         tasks["watermarks"] = detect_watermarks
 
     cuda_mode = settings["device"].startswith("cuda")
-    if not settings["parallel_detections"] or len(tasks) < 2:
+    if len(tasks) < 2:
         parallel_mode = "sequential"
         for name, task in tasks.items():
             detections[name] = task()
@@ -223,16 +227,11 @@ def process_image(
     if image is None:
         raise ValueError(f"Could not read image: {source_path}")
 
-    detections, timings, parallel_mode = run_detections(image, models, settings)
-    if settings["compare_sequential"] and parallel_mode != "sequential":
-        sequential_settings = {**settings, "parallel_detections": False}
-        sequential_detections, _, _ = run_detections(image, models, sequential_settings)
-        timings["detection_equivalent"] = float(
-            detections.get("plates", []) == sequential_detections.get("plates", [])
-            and np.array_equal(detections.get("human_mask"), sequential_detections.get("human_mask"))
-            and detections.get("watermarks", []) == sequential_detections.get("watermarks", [])
-        )
+    exif_started = time.perf_counter()
+    geo_exif = extract_geo_exif(source_path) if settings["exif_strip"] else None
+    exif_extracted = time.perf_counter() - exif_started
 
+    detections, timings, parallel_mode = run_detections(image, models, settings)
     if settings["plate_mask"]:
         started = time.perf_counter()
         image = redact_plate_boxes(image, detections["plates"], settings["mask_mode"])
@@ -258,8 +257,9 @@ def process_image(
         quality, quality_score = "UNCHANGED", None
 
     started = time.perf_counter()
-    save_with_geo_exif(image, source_path, output_path, settings["exif_strip"])
+    save_with_geo_exif(image, output_path, settings["exif_strip"], geo_exif)
     timings["save_seconds"] = time.perf_counter() - started
+    timings["exif_extract_seconds"] = exif_extracted
     with output_path.open("rb") as output_file:
         output_sha256 = hashlib.sha256(output_file.read()).hexdigest()
 
@@ -278,6 +278,54 @@ def process_image(
         "output_sha256": output_sha256,
         **timings,
     }
+
+
+def initialize_worker(settings: dict[str, Any]) -> None:
+    """Load enabled models once in each worker process."""
+    global _WORKER_MODELS, _WORKER_SETTINGS
+    _WORKER_SETTINGS = dict(settings)
+    loaded = load_models(
+        _WORKER_SETTINGS["plate_mask"],
+        _WORKER_SETTINGS["human_mask"],
+        _WORKER_SETTINGS["watermark_removal"],
+        _WORKER_SETTINGS["ocr"],
+        _WORKER_SETTINGS["weights"],
+        _WORKER_SETTINGS["device"],
+        _WORKER_SETTINGS["ocr_langs"],
+    )
+    _WORKER_MODELS = loaded[:4]
+    model_timings = loaded[4]
+    print(
+        f"Worker {os.getpid()} loaded models: "
+        + ("; ".join(f"{key}={value:.3f}s" for key, value in model_timings.items()) or "none"),
+        flush=True,
+    )
+
+
+def process_worker(task: tuple[int, str, str]) -> dict[str, Any]:
+    """Process one image using the models owned by the current worker."""
+    index, source_name, output_name = task
+    if _WORKER_MODELS is None or _WORKER_SETTINGS is None:
+        raise RuntimeError("Worker models were not initialized")
+    source_path = Path(source_name)
+    output_path = Path(output_name)
+    result = process_image(source_path, output_path, _WORKER_MODELS, _WORKER_SETTINGS)
+    result["index"] = index
+    result["image_name"] = source_name
+    return result
+
+
+def choose_worker_count(settings: dict[str, Any]) -> int:
+    import torch
+
+    configured = int(settings["workers"])
+    if configured > 0:
+        requested = configured
+    else:
+        requested = 2
+    if settings["device"].startswith("cuda") and torch.cuda.is_available():
+        return min(requested, max(1, int(settings["max_gpu_workers"])))
+    return requested
 
 def main() -> None:
     started = time.perf_counter()
@@ -310,8 +358,9 @@ def main() -> None:
         "human_mask": bool(resolve(args.human_mask, config, "human_mask")),
         "plate_mask": bool(resolve(args.plate_mask, config, "plate_mask")),
         "resizing": bool(resolve(args.resizing, config, "resizing")),
-        "parallel_detections": bool(resolve(args.parallel_detections, config, "parallel_detections")),
-        "compare_sequential": bool(resolve(args.compare_sequential, config, "compare_sequential")),
+        "workers": int(resolve(args.workers, config, "workers")),
+        "max_gpu_workers": int(resolve(args.max_gpu_workers, config, "max_gpu_workers")),
+        "worker_start_method": str(resolve(None, config, "worker_start_method")),
     }
 
     if settings["device"] == "auto":
@@ -321,21 +370,10 @@ def main() -> None:
 
     output_dir.mkdir(parents=True, exist_ok=True)
     temp_dir.mkdir(parents=True, exist_ok=True)
-    models_started = time.perf_counter()
-    model_objects = load_models(
-        settings["plate_mask"], settings["human_mask"], settings["watermark_removal"],
-        settings["ocr"], settings["weights"], settings["device"], settings["ocr_langs"],
-    )
-    yolo_model, deeplab_model, deeplab_device, ocr_reader, model_times = model_objects
-    print(f"Loaded enabled models in {time.perf_counter() - models_started:.3f} seconds")
-    for name, seconds in model_times.items():
-        print(f"{name}: {seconds:.3f} seconds")
-    import torch
-
-    if settings["device"].startswith("cuda") and torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats()
-    processing_started = time.perf_counter()
-    cpu_started = time.process_time()
+    worker_count = choose_worker_count(settings)
+    start_method = str(settings["worker_start_method"])
+    context = mp.get_context(start_method)
+    print(f"Starting {worker_count} worker process(es) with start method={start_method}")
 
     csv_path = temp_dir / "plate_results.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
@@ -346,47 +384,41 @@ def main() -> None:
         total_plate_detections = 0
         total_human_mask_pixels = 0
         total_watermark_detections = 0
-        equivalent_images = 0
+        tasks = [
+            (index, str(source_path), str(output_dir / source_path.relative_to(input_dir)))
+            for index, source_path in enumerate(image_files, 1)
+        ]
+        with ProcessPoolExecutor(
+            max_workers=worker_count,
+            mp_context=context,
+            initializer=initialize_worker,
+            initargs=(settings,),
+        ) as executor:
+            futures = {executor.submit(process_worker, task): task for task in tasks}
+            completed_results: dict[int, dict[str, Any]] = {}
+            for future in as_completed(futures):
+                task = futures[future]
+                try:
+                    result = future.result()
+                    completed_results[result["index"]] = result
+                    successful += 1
+                    total_plate_detections += result["plate_detection_count"]
+                    total_human_mask_pixels += result["human_detection_count"]
+                    total_watermark_detections += result["watermark_detection_count"]
+                    print(f"[{result['index']}/{len(image_files)}] Completed {Path(result['image_name']).name}")
+                except Exception as exc:
+                    errors += 1
+                    completed_results[task[0]] = {"plate_text": "", "error": str(exc)}
+                    print(f"[{task[0]}/{len(image_files)}] Failed: {exc}")
+
         for index, source_path in enumerate(image_files, 1):
             relative_path = source_path.relative_to(input_dir)
-            output_path = output_dir / relative_path
-            print(f"[{index}/{len(image_files)}] Processing {relative_path}")
-            try:
-                result = process_image(
-                    source_path,
-                    output_path,
-                    (yolo_model, deeplab_model, deeplab_device, ocr_reader),
-                    settings,
-                )
-                writer.writerow([relative_path.as_posix(), result["plate_text"]])
-                total_plate_detections += result["plate_detection_count"]
-                total_human_mask_pixels += result["human_detection_count"]
-                total_watermark_detections += result["watermark_detection_count"]
-                equivalent_images += int(result.get("detection_equivalent", False))
-                timing_text = "; ".join(
-                    f"{key}={value:.3f}s" for key, value in result.items() if key.endswith("seconds")
-                )
-                print(f"  {timing_text}")
-                successful += 1
-            except Exception as exc:
-                errors += 1
-                writer.writerow([relative_path.as_posix(), ""])
-                print(f"  Failed: {exc}")
+            result = completed_results[index]
+            writer.writerow([relative_path.as_posix(), result.get("plate_text", "")])
 
     total_seconds = time.perf_counter() - started
     print(f"Processed: {len(image_files)} | Successful: {successful} | Errors: {errors}")
-    processing_wall_seconds = time.perf_counter() - processing_started
-    cpu_utilization = (time.process_time() - cpu_started) / max(processing_wall_seconds, 1e-9)
-    cpu_utilization = cpu_utilization / max(os.cpu_count() or 1, 1) * 100.0
-    peak_gpu_mb = 0.0
-    if settings["device"].startswith("cuda") and torch.cuda.is_available():
-        peak_gpu_mb = torch.cuda.max_memory_allocated() / (1024 * 1024)
     print(f"Detection counts: plates={total_plate_detections}; human_mask_pixels={total_human_mask_pixels}; watermarks={total_watermark_detections}")
-    if settings["compare_sequential"]:
-        print(f"Parallel/sequential detection equivalence: {equivalent_images}/{successful} images")
-    print(f"CPU utilization during image processing: {cpu_utilization:.1f}%")
-    print(f"Peak GPU memory allocated: {peak_gpu_mb:.1f} MB")
-    print(f"Image processing wall time: {processing_wall_seconds:.3f} seconds")
     print(f"Pipeline complete in {total_seconds:.3f} seconds")
     print(f"Final images saved to: {output_dir}")
     print(f"Plate results saved to: {csv_path}")

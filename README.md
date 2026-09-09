@@ -38,7 +38,7 @@ The pipeline supports configuration via `pipeline_config.json` and command-line 
 - `conf`, `imgsz`, `high_thresh`, `low_thresh`
 - `ext`
 - `exif_strip`, `watermark_removal`, `human_mask`, `plate_mask`, `resizing`
-- `parallel_detections`, `compare_sequential`
+- `workers`, `max_gpu_workers`, `worker_start_method`
 
 ### Reusable in-memory stage APIs
 
@@ -57,9 +57,9 @@ from app.deidentification import (
 )
 ```
 
-The intended per-image order is: decode -> run the three detections -> apply the three redactions -> resize in memory -> save once with optional GPS-only EXIF preservation.
+The intended per-image order is: decode -> capture GPS-only EXIF -> run the three detections -> apply the three redactions -> resize in memory -> save once with the captured GPS metadata.
 
-When `parallel_detections` is enabled, CPU runs all enabled detectors concurrently. On CUDA, YOLO and DeepLab remain sequential while CPU EasyOCR watermark detection runs alongside them. Redactions remain sequential. The pipeline reports individual detector times, total detection wall time, detection counts, CPU utilization, peak GPU memory, output SHA-256 values, and optional parallel/sequential equivalence results from `compare_sequential`.
+Detector parallelism is always enabled. CPU runs all enabled detectors concurrently. On CUDA, YOLO and DeepLab remain sequential while CPU EasyOCR watermark detection runs alongside them. Redactions remain sequential. Images are processed across worker processes; `workers: 0` chooses CPU count minus one, while `max_gpu_workers` caps GPU workers. The pipeline reports individual detector times, total detection wall time, detection counts, and worker model-loading times.
 
 Local run using config:
 

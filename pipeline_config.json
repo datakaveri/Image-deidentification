@@ -1,7 +1,7 @@
 {
-  "input_dir": "app/crop_images",
-  "output_dir": "app/output/crop_final",
-  "temp_dir": "app/output/temp_crop",
+  "input_dir": "app/images_test",
+  "output_dir": "app/output/test_final",
+  "temp_dir": "app/output/temp_final",
   "weights": "app/sensitive_data_masking/license_plate_detector.pt",
   "device": "auto",
   "mask_mode": "black",
@@ -17,6 +17,7 @@
   "human_mask": true,
   "plate_mask": true,
   "resizing": true,
-  "parallel_detections": true,
-  "compare_sequential": false
+  "workers": 0,
+  "max_gpu_workers": 1,
+  "worker_start_method": "spawn"
 }
