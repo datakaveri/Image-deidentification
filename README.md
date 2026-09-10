@@ -1,17 +1,41 @@
 # Road Defect Anonymization
 
-This project builds an end-to-end image anonymization pipeline for road-defect datasets. The complete pipeline flow is:
+This project performs end-to-end anonymization for road-defect images using a reusable in-memory pipeline packaged under `app/deidentification`.
 
-`decode once` -> `plate detection` -> `human detection` -> `watermark detection` -> `redactions` -> `resize in memory` -> `GPS-only EXIF save`
+The current workflow is:
 
-The main entrypoint is [main.py](main.py), which runs the full sequence in one command. Enabled models are loaded once and reused for every image; intermediate stage images are not written.
+`decode image` -> `extract GPS-only EXIF metadata` -> `parallel plate / human / watermark detection` -> `sequential redaction` -> `resize in memory` -> `save final image once with preserved GPS metadata`
+
+```mermaid
+flowchart LR
+    A[Input image directory] --> B[main.py
+worker scheduler]
+    B --> C[ProcessPoolExecutor]
+    C --> D[Worker 1: load models once]
+    C --> E[Worker 2: load models once]
+    D --> F[Plate / Human / Watermark detection]
+    E --> F
+    F --> G[Sequential redaction]
+    G --> H[Resize in memory]
+    H --> I[Save final image + GPS EXIF]
+    I --> J[CSV output + metrics]
+
+    subgraph App[app/deidentification package]
+        F
+        G
+        H
+        I
+    end
+```
+
+The main entrypoint is [main.py](main.py). It loads enabled models once per worker process, processes images in parallel, and avoids writing intermediate masked images to disk unless the caller explicitly uses a temporary debug directory structure.
 
 ## Requirements
 
-- Python 3.9+
-- CUDA-capable GPU is optional; the pipeline will fall back to CPU when unavailable.
-- The repository expects the following model assets:
-  - [app/sensitive_data_masking/license_plate_detector.pt](app/sensitive_data_masking/license_plate_detector.pt)
+- Python 3.10+
+- OpenCV, PyTorch, torchvision, ultralytics, EasyOCR, and Pillow
+- CUDA-capable GPU is optional; the pipeline falls back to CPU automatically
+- The YOLO plate model is expected at [app/sensitive_data_masking/license_plate_detector.pt](app/sensitive_data_masking/license_plate_detector.pt)
 
 ## Setup
 
@@ -28,9 +52,11 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Configuration
+## Configuration
 
-The pipeline supports configuration via `pipeline_config.json` and command-line overrides. Example config fields:
+The pipeline reads settings from `pipeline_config.json` and supports command-line overrides.
+
+Example config keys:
 
 - `input_dir`, `output_dir`, `temp_dir`
 - `weights`, `device`, `mask_mode`
@@ -40,45 +66,102 @@ The pipeline supports configuration via `pipeline_config.json` and command-line 
 - `exif_strip`, `watermark_removal`, `human_mask`, `plate_mask`, `resizing`
 - `workers`, `max_gpu_workers`, `worker_start_method`
 
-### Reusable in-memory stage APIs
+A typical config is:
 
-The reusable stage functions are available from `app.deidentification`. They accept a decoded image for detection and return redacted image data without writing intermediate files:
+```json
+{
+  "input_dir": "train/images",
+  "output_dir": "outputs/final",
+  "temp_dir": "outputs/temp",
+  "weights": "app/sensitive_data_masking/license_plate_detector.pt",
+  "device": "auto",
+  "mask_mode": "black",
+  "ocr": false,
+  "ocr_langs": "en",
+  "conf": 0.1,
+  "imgsz": 640,
+  "high_thresh": 500.0,
+  "low_thresh": 100.0,
+  "ext": "jpg,jpeg,png,bmp,tif,tiff,webp",
+  "exif_strip": true,
+  "watermark_removal": true,
+  "human_mask": true,
+  "plate_mask": true,
+  "resizing": true,
+  "workers": 0,
+  "max_gpu_workers": 1,
+  "worker_start_method": "spawn"
+}
+```
+
+## Current package-based pipeline
+
+The reusable API lives in [app/deidentification/__init__.py](app/deidentification/__init__.py). The package exports the main detection, redaction, resize, and EXIF helpers:
 
 ```python
 from app.deidentification import (
-  detect_human_mask,
-  detect_plate_boxes,
-  detect_watermark_regions,
-  redact_human_mask,
-  redact_plate_boxes,
-  redact_watermark_regions,
-  resize_for_quality,
-  save_with_geo_exif,
+    detect_human_mask,
+    detect_plate_boxes,
+    detect_watermark_regions,
+    redact_human_mask,
+    redact_plate_boxes,
+    redact_watermark_regions,
+    resize_for_quality,
+    extract_geo_exif,
+    save_with_geo_exif,
 )
 ```
 
-The intended per-image order is: decode -> capture GPS-only EXIF -> run the three detections -> apply the three redactions -> resize in memory -> save once with the captured GPS metadata.
+The implementation is split into stage modules:
 
-Detector parallelism is always enabled. CPU runs all enabled detectors concurrently. On CUDA, YOLO and DeepLab remain sequential while CPU EasyOCR watermark detection runs alongside them. Redactions remain sequential. Images are processed across worker processes; `workers: 0` chooses CPU count minus one, while `max_gpu_workers` caps GPU workers. The pipeline reports individual detector times, total detection wall time, detection counts, and worker model-loading times.
+- [app/deidentification/plate_stage.py](app/deidentification/plate_stage.py): YOLO plate detection and redaction
+- [app/deidentification/deeplab_stage.py](app/deidentification/deeplab_stage.py): DeepLab human segmentation and masking
+- [app/deidentification/watermark_stage.py](app/deidentification/watermark_stage.py): EasyOCR-based watermark detection and redaction
+- [app/deidentification/exif_stage.py](app/deidentification/exif_stage.py): GPS-only EXIF extraction and final save with metadata preservation
+- [app/deidentification/resize_stage.py](app/deidentification/resize_stage.py): optional resize step before final save
 
-Local run using config:
+Per image, the pipeline now follows this order:
+
+1. Read the image
+2. Extract only GPS/geo EXIF metadata if enabled
+3. Run enabled detections in parallel
+4. Apply redactions sequentially
+5. Resize in memory if enabled
+6. Save the final anonymized image once, preserving the captured EXIF metadata
+
+## Parallel detection and worker processes
+
+The orchestration in [main.py](main.py) runs one task per image over a ProcessPoolExecutor.
+
+Behavior:
+
+- `workers: 0` uses a default worker count of 2 unless GPU mode is enabled
+- `max_gpu_workers` caps process count on CUDA
+- `worker_start_method` is configurable and defaults to `spawn`
+- each worker initializes the enabled models once and reuses them for all images in that process
+- EasyOCR is shared per worker to avoid reloading it for every image
+- detection timings are recorded per stage, as well as model-load timing and end-to-end detection wall time
+
+The pipeline records:
+
+- plate detection time
+- human detection time
+- watermark detection time
+- total detection wall time
+- plate redaction time
+- human redaction time
+- watermark redaction time
+- EXIF extraction time
+- save time
+- model-load time for YOLO, DeepLab, and EasyOCR
+
+## Running the full pipeline
 
 ```bash
 python main.py --config pipeline_config.json
 ```
 
-Override a config value from the command line:
-
-```bash
-python main.py --config pipeline_config.json --ocr --mask-mode blur
-```
-
-### What the pipeline produces
-
-- Intermediate outputs are written under temp-dir named folder for debugging
-- Final resized images are written under output-dir named folder
-
-## Run the full pipeline
+Optional CLI overrides:
 
 ```bash
 python main.py \
@@ -98,67 +181,14 @@ python main.py \
   --resizing
 ```
 
-## Run individual steps
+## Output behavior
 
-### 1. Preserve only GPS/geo EXIF tags
-
-```bash
-python app/exif_geo_tag/store_geo_tag_exif.py \
-  input_dir \
-  output_dir \
-  --recursive
-```
-
-### 2. Remove watermark (EasyOCR-based)
-
-```bash
-python app/watermark_removal/remove_watermark.py \
-  app/watermark_removal/IMG20260730125027.jpg \
-  outputs/cleaned.jpg \
-  --detection-output outputs/detection_boxes.jpg
-```
-
-The above step uses EasyOCR to detect text regions in the image border before redacting watermark text.
-
-### 3. Mask humans with DeepLab
-
-```bash
-python app/sensitive_data_masking/deeplab.py \
-  --input-dir outputs/temp/watermark_removed \
-  --output-dir outputs/temp/human_masked \
-  --mask-type blur
-```
-
-### 4. Mask license plates
-
-```bash
-python app/sensitive_data_masking/mask_plates.py \
-  --weights app/sensitive_data_masking/license_plate_detector.pt \
-  --source outputs/temp/human_masked \
-  --out outputs/temp/plate_masked \
-  --mode black \
-  --ocr \
-  --ocr-langs en \
-  --output-csv outputs/temp/plate_results.csv \
-  --device auto \
-  --conf 0.1 \
-  --imgsz 640 \
-  --classes "license plate,number plate,plate"
-```
-
-### 5. Resize images
-
-```bash
-python app/resizing.py \
-  outputs/temp/plate_masked \
-  outputs/final \
-  --high-thresh 500.0 \
-  --low-thresh 100.0
-```
+- Final anonymized images are written to `output_dir`
+- A CSV of detected plate text is written to `temp_dir/plate_results.csv`
+- EXIF metadata is preserved only for GPS/geo tags before the final save step
+- Intermediate stage images are not normally written to disk as part of the main package pipeline
 
 ## Docker
-
-This container installs the EasyOCR-based watermark removal pipeline and does not use PaddleOCR.
 
 Build the image:
 
@@ -166,30 +196,29 @@ Build the image:
 docker build -t road-defect-anonymization .
 ```
 
-Run the full pipeline inside the container:
+Run the pipeline in the container:
 
 ```bash
 docker run --rm -it \
   -v $(pwd)/train:/app/train \
   -v $(pwd)/outputs:/app/outputs \
   road-defect-anonymization \
-  python main.py \
-    --config pipeline_config.json
+  python main.py --config pipeline_config.json
 ```
 
 ## Docker Compose
 
-Start the service with:
+Start the stack:
 
 ```bash
 docker compose up --build
 ```
 
-To run the pipeline from the compose service:
+Run the pipeline inside the compose service:
 
 ```bash
 docker compose run --rm road-defect-app \
-  python main.py \    --config pipeline_config.json
+  python main.py --config pipeline_config.json
 ```
 
 ## Project structure
@@ -197,26 +226,31 @@ docker compose run --rm road-defect-app \
 ```text
 road-defect_anonymization/
 ├── app/
-│   ├── exif_geo_tag/
-│   │   └── store_geo_tag_exif.py
+│   ├── deidentification/
+│   │   ├── __init__.py
+│   │   ├── contracts.py
+│   │   ├── deeplab_stage.py
+│   │   ├── exif_stage.py
+│   │   ├── plate_stage.py
+│   │   ├── resize_stage.py
+│   │   └── watermark_stage.py
 │   ├── sensitive_data_masking/
-│   │   ├── deeplab.py
-│   │   ├── mask_plates.py
 │   │   └── license_plate_detector.pt
-│   └── watermark_removal/
-│       ├── remove_watermark.py
-│       └── ...
+│   └── ...
 ├── main.py
+├── pipeline_config.json
+├── requirements.txt
 ├── Dockerfile
 ├── docker-compose.yml
-├── requirements.txt
 ├── README.md
 ├── outputs/
-└── train/
+├── train/
+└── app/images_test/
 ```
 
 ## Notes
 
-- The pipeline is designed to work with image directories rather than single files.
-- The DeepLab step can be slow on CPU, so a GPU is recommended for larger datasets.
-- Do not commit model weights or large image datasets to the repository unless required.
+- The main workflow is package-based and in-memory; it is not the older multi-step script chain.
+- EasyOCR is the active OCR engine for watermark detection.
+- Plate detection uses Ultralytics YOLO, and human masking uses torchvision DeepLabV3.
+- The project preserves only the geo/GPS EXIF footprint before the final save so sensitive metadata is stripped while location data remains available when needed.
