@@ -1,4 +1,4 @@
-# Road Defect Anonymization
+# Road Defect Anonymization (diff with v1.1 - parallelization implemented)
 
 This project performs end-to-end anonymization for road-defect images using a reusable in-memory pipeline packaged under `app/deidentification`.
 
