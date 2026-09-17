@@ -1,4 +1,4 @@
-# Road Defect Anonymization
+# Road Defect Anonymization (diff with v1 - time analysis added)
 
 This project builds an end-to-end image anonymization pipeline for road-defect datasets. The complete pipeline flow is:
 
