@@ -36,7 +36,7 @@ def redact_human_mask(
     mask: np.ndarray,
     mask_type: str = "blur",
     blur_kernel: int = 51,
-    color_bgr: tuple[int, int, int] = (0, 0, 0),
+    color_bgr: tuple[int, int, int] = (158, 158, 158),
 ) -> np.ndarray:
     """Apply a DeepLab mask to a copy of an image."""
     redacted = image.copy()
