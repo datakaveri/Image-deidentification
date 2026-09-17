@@ -1,7 +1,7 @@
 {
-  "input_dir": "app/images_test",
-  "output_dir": "app/output/test_final",
-  "temp_dir": "app/output/temp_final",
+  "input_dir": "app/sensitive_data_masking/img",
+  "output_dir": "app/output/img_output",
+  "temp_dir": "app/output/temp_img",
   "weights": "app/sensitive_data_masking/license_plate_detector.pt",
   "device": "auto",
   "mask_mode": "black",
@@ -16,7 +16,7 @@
   "watermark_removal": true,
   "human_mask": true,
   "plate_mask": true,
-  "resizing": true,
+  "resizing": false,
   "workers": 0,
   "max_gpu_workers": 1,
   "worker_start_method": "spawn"
