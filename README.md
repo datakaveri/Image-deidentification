@@ -64,7 +64,7 @@ Example config keys:
 - `conf`, `imgsz`, `high_thresh`, `low_thresh`
 - `ext`
 - `exif_strip`, `watermark_removal`, `human_mask`, `plate_mask`, `resizing`
-- `workers`, `max_gpu_workers`, `worker_start_method`
+- `workers`, `max_gpu_workers`, `worker_start_method`, `log_file`
 
 A typical config is:
 
@@ -90,7 +90,8 @@ A typical config is:
   "resizing": true,
   "workers": 0,
   "max_gpu_workers": 1,
-  "worker_start_method": "spawn"
+  "worker_start_method": "spawn",
+  "log_file": ""
 }
 ```
 
@@ -138,8 +139,11 @@ Behavior:
 - `workers: 0` uses a default worker count of 2 unless GPU mode is enabled
 - `max_gpu_workers` caps process count on CUDA
 - `worker_start_method` is configurable and defaults to `spawn`
+- logs are saved to `temp_dir/pipeline.log` by default; set `log_file` or use `--log-file` to choose another path
 - each worker initializes the enabled models once and reuses them for all images in that process
 - EasyOCR is shared per worker to avoid reloading it for every image
+- queue activity is logged for task submission, worker start, completion, and failure
+- queue snapshots include submitted, waiting, running, completed, and failed job counts
 - detection timings are recorded per stage, as well as model-load timing and end-to-end detection wall time
 
 The pipeline records:
@@ -154,11 +158,27 @@ The pipeline records:
 - EXIF extraction time
 - save time
 - model-load time for YOLO, DeepLab, and EasyOCR
+- parent-process peak RSS memory
+- sum of worker-process peak RSS memory
+- total system RAM and sampled peak system RAM used
+- CUDA peak allocated and reserved memory when CUDA is active
+- virtual-memory total, used, available, and percentage
+- logical CPU count, physical core count, CPU affinity, peak system CPU usage, and configured worker count
+
+Memory values are reported in the terminal and in the run log. Worker RAM is measured per worker and summed across workers; this is a sum of individual worker peaks, not necessarily a single instantaneous total. System and worker aggregate values are sampled while the pool is running, so very short-lived spikes may not be captured by the parent sampler.
+
+Queue log entries use `waiting` for submitted jobs that have not started, `running` for started jobs that have not finished, and `completed`/`failed` for finished jobs. Since all image tasks are currently submitted eagerly, the initial waiting count can grow to nearly the number of input images before workers begin consuming it.
 
 ## Running the full pipeline
 
 ```bash
 python main.py --config pipeline_config.json
+```
+
+To choose a custom log path:
+
+```bash
+python main.py --config pipeline_config.json --workers 2 --log-file outputs/pipeline.log
 ```
 
 Optional CLI overrides:
@@ -185,6 +205,7 @@ python main.py \
 
 - Final anonymized images are written to `output_dir`
 - A CSV of detected plate text is written to `temp_dir/plate_results.csv`
+- A persistent run log is written to `temp_dir/pipeline.log` by default
 - EXIF metadata is preserved only for GPS/geo tags before the final save step
 - Intermediate stage images are not normally written to disk as part of the main package pipeline
 

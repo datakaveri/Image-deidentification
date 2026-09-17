@@ -60,9 +60,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "exif_strip": True,
     "watermark_removal": True,
     "human_mask": True,
-    "human_mask_mode": "blur",
-    "human_blur_kernel": 51,
-    "human_dilation_size": 5,
     "plate_mask": True,
     "resizing": True,
     "workers": 0,
@@ -88,9 +85,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--imgsz", type=int, default=None)
     parser.add_argument("--high-thresh", type=float, default=None)
     parser.add_argument("--low-thresh", type=float, default=None)
-    parser.add_argument("--human-blur-kernel", type=int, default=None)
-    parser.add_argument("--human-dilation-size", type=int, default=None)
-    parser.add_argument("--human-mask-mode", choices=["blur", "color"], default=None)
     parser.add_argument("--ext", default=None)
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--max-gpu-workers", type=int, default=None)
@@ -363,12 +357,7 @@ def run_detections(image: Any, models: tuple[Any, Any, Any, Any], settings: dict
 
     def detect_humans() -> Any:
         item_started = time.perf_counter()
-        result = detect_human_mask(
-            deeplab_model,
-            deeplab_device,
-            image,
-            dilation_size=int(settings.get("human_dilation_size", 5)),
-        )
+        result = detect_human_mask(deeplab_model, deeplab_device, image, dilation_size=5)
         timings["human_detection_seconds"] = time.perf_counter() - item_started
         return result
 
@@ -451,12 +440,7 @@ def process_image(
 
     if settings["human_mask"]:
         started = time.perf_counter()
-        redacted_image = redact_human_mask(
-            redacted_image,
-            detections["human_mask"],
-            settings.get("human_mask_mode", "blur"),
-            blur_kernel=int(settings.get("human_blur_kernel", 51)),
-        )
+        redacted_image = redact_human_mask(redacted_image, detections["human_mask"], "blur")
         timings["human_redaction_seconds"] = time.perf_counter() - started
 
     if settings["watermark_removal"]:
@@ -595,9 +579,6 @@ def main() -> None:
         "exif_strip": bool(resolve(args.exif_strip, config, "exif_strip")),
         "watermark_removal": bool(resolve(args.watermark_removal, config, "watermark_removal")),
         "human_mask": bool(resolve(args.human_mask, config, "human_mask")),
-        "human_mask_mode": str(resolve(args.human_mask_mode, config, "human_mask_mode")),
-        "human_blur_kernel": int(resolve(args.human_blur_kernel, config, "human_blur_kernel")),
-        "human_dilation_size": int(resolve(args.human_dilation_size, config, "human_dilation_size")),
         "plate_mask": bool(resolve(args.plate_mask, config, "plate_mask")),
         "resizing": bool(resolve(args.resizing, config, "resizing")),
         "workers": int(resolve(args.workers, config, "workers")),
