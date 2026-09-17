@@ -8,7 +8,7 @@
   "exif_strip": true,
   "watermark_removal": true,
   "human_mask": true,
-  "human_mask_mode": "color",
+  "human_mask_mode": "blur",
   "human_blur_kernel": 15551,
   "human_dilation_size": 91,
   "plate_mask": true,
