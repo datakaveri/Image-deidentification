@@ -35,8 +35,8 @@ def redact_human_mask(
     image: np.ndarray,
     mask: np.ndarray,
     mask_type: str = "blur",
-    blur_kernel: int = 51,
-    color_bgr: tuple[int, int, int] = (158, 158, 158),
+    blur_kernel: int = 15551,
+    color_bgr: tuple[int, int, int] = (0, 0, 0),
 ) -> np.ndarray:
     """Apply a DeepLab mask to a copy of an image."""
     redacted = image.copy()
@@ -48,8 +48,10 @@ def redact_human_mask(
             raise ValueError("blur_kernel must be a positive odd integer")
         blurred = cv2.GaussianBlur(redacted, (blur_kernel, blur_kernel), 0)
         redacted[selected] = blurred[selected]
-    elif mask_type == "color":
-        redacted[selected] = color_bgr
+    elif mask_type == "black":
+        redacted[selected] = (0, 0, 0)
+    elif mask_type == "grey":
+        redacted[selected] = (158, 158, 158)
     else:
         raise ValueError(f"Unsupported human masking type: {mask_type}")
     return redacted

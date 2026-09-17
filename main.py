@@ -90,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--low-thresh", type=float, default=None)
     parser.add_argument("--human-blur-kernel", type=int, default=None)
     parser.add_argument("--human-dilation-size", type=int, default=None)
-    parser.add_argument("--human-mask-mode", choices=["blur", "color"], default=None)
+    parser.add_argument("--human-mask-mode", choices=["blur", "black", "grey"], default=None)
     parser.add_argument("--ext", default=None)
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--max-gpu-workers", type=int, default=None)
