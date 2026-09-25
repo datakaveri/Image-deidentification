@@ -35,7 +35,7 @@ The main entrypoint is [main.py](main.py). It loads enabled models once per work
 - Python 3.10+
 - OpenCV, PyTorch, torchvision, ultralytics, EasyOCR, and Pillow
 - CUDA-capable GPU is optional; the pipeline falls back to CPU automatically
-- The YOLO plate model is expected at [app/sensitive_data_masking/license_plate_detector.pt](app/sensitive_data_masking/license_plate_detector.pt)
+- The YOLO plate model is expected at `models/license_plate_detector.pt` or `app/sensitive_data_masking/license_plate_detector.pt` (downloaded via `scripts/download_models.py`)
 
 ## Setup
 
@@ -51,6 +51,22 @@ source .venv/bin/activate
 ```bash
 pip install -r requirements.txt
 ```
+
+3. Download model weights:
+
+Large model binaries are stored outside Git as GitHub Release assets. Fetch and verify them by running:
+
+```bash
+python scripts/download_models.py
+```
+
+Or using the shell wrapper:
+
+```bash
+./scripts/download_models.sh
+```
+
+During Docker builds, weights are automatically downloaded and verified at build time.
 
 ## Configuration
 
@@ -256,8 +272,13 @@ road-defect_anonymization/
 │   │   ├── resize_stage.py
 │   │   └── watermark_stage.py
 │   ├── sensitive_data_masking/
-│   │   └── license_plate_detector.pt
+│   │   └── mask_plates.py
 │   └── ...
+├── models/
+│   └── (license_plate_detector.pt - gitignored, fetched at build/setup)
+├── scripts/
+│   ├── download_models.py
+│   └── download_models.sh
 ├── main.py
 ├── pipeline_config.json
 ├── requirements.txt

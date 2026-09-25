@@ -324,7 +324,21 @@ def load_models(
         from ultralytics import YOLO
 
         started = time.perf_counter()
-        yolo_model = YOLO(str(weights))
+        weights_path = Path(weights)
+        if not weights_path.exists():
+            alt_path = (
+                ROOT_DIR / "models" / weights_path.name
+                if "sensitive_data_masking" in str(weights_path)
+                else ROOT_DIR / "app" / "sensitive_data_masking" / weights_path.name
+            )
+            if alt_path.exists():
+                weights_path = alt_path
+            else:
+                raise FileNotFoundError(
+                    f"Plate detector weights not found at '{weights}'. "
+                    f"Please download them by running: python scripts/download_models.py"
+                )
+        yolo_model = YOLO(str(weights_path))
         load_times["yolo_model_load_seconds"] = time.perf_counter() - started
 
     if human_mask:
