@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-#"""Configuration-driven in-memory road-defect anonymization pipeline."""
+"""Configuration-driven in-memory road-survey image de-identification pipeline."""
 
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def configure_worker_logging(log_queue: Any) -> logging.Logger:
-    logger = logging.getLogger("road_defect")
+    logger = logging.getLogger("image_deidentification")
     logger.handlers.clear()
     logger.setLevel(logging.INFO)
     logger.propagate = False

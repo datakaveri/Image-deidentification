@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Model download and verification script for Road Defect Anonymization.
+Model download and verification script for road-survey image de-identification.
 
 Downloads model weights (e.g., license_plate_detector.pt) from a GitHub Release
 or configurable URL, verifies their SHA-256 checksum, and ensures model weights
@@ -176,7 +176,7 @@ def download_file(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Download and verify model weights for road defect anonymization."
+        description="Download and verify model weights for road-survey image de-identification."
     )
     parser.add_argument(
         "--url",

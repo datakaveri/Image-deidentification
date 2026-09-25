@@ -1,6 +1,10 @@
-# Road Defect Anonymization
+# Road-Survey Image De-identification
 
-This project performs end-to-end anonymization for road-defect images using a reusable in-memory pipeline packaged under `app/deidentification`.
+Automated de-identification pipeline for road-survey imagery. The tool detects and redacts
+personally-identifiable content — **licence plates**, **persons**, and **embedded watermarks** —
+captured during road-survey / road-defect inspection runs.
+The pipeline is packaged under `app/deidentification` and can be driven from the CLI, a
+config file, or a Docker container.
 
 The current workflow is:
 
@@ -230,7 +234,7 @@ python main.py \
 Build the image:
 
 ```bash
-docker build -t road-defect-anonymization .
+docker build -t image-deidentification .
 ```
 
 Run the pipeline in the container:
@@ -239,7 +243,7 @@ Run the pipeline in the container:
 docker run --rm -it \
   -v $(pwd)/train:/app/train \
   -v $(pwd)/outputs:/app/outputs \
-  road-defect-anonymization \
+  image-deidentification \
   python main.py --config pipeline_config.json
 ```
 
@@ -254,14 +258,14 @@ docker compose up --build
 Run the pipeline inside the compose service:
 
 ```bash
-docker compose run --rm road-defect-app \
+docker compose run --rm skald-image \
   python main.py --config pipeline_config.json
 ```
 
 ## Project structure
 
 ```text
-road-defect_anonymization/
+Image-deidentification/
 ├── app/
 │   ├── deidentification/
 │   │   ├── __init__.py
