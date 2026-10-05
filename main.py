@@ -430,6 +430,8 @@ def process_image(
     models: tuple[Any, Any, Any, Any],
     settings: dict[str, Any],
 ) -> dict[str, Any]:
+    processing_started = time.perf_counter()
+    image_size_bytes = source_path.stat().st_size
     yolo_model, deeplab_model, deeplab_device, ocr_reader = models
     original_image = cv2.imread(str(source_path), cv2.IMREAD_COLOR)
     if original_image is None:
@@ -499,6 +501,11 @@ def process_image(
     )
     return {
         "image_name": str(source_path),
+        "image_width_px": initial_width,
+        "image_height_px": initial_height,
+        "image_size_bytes": image_size_bytes,
+        "image_size_mb": image_size_bytes / (1024 * 1024),
+        "processing_time_seconds": time.perf_counter() - processing_started,
         "plate_text": plate_text,
         "quality": quality,
         "quality_score": quality_score,
@@ -642,9 +649,27 @@ def main() -> None:
     logger.info("RUN start input=%s output=%s workers=%s start_method=%s", input_dir, output_dir, worker_count, start_method)
 
     csv_path = temp_dir / "plate_results.csv"
-    with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
+    report_path = temp_dir / "processing_report.csv"
+    with (
+        csv_path.open("w", newline="", encoding="utf-8") as csv_file,
+        report_path.open("w", newline="", encoding="utf-8") as report_file,
+    ):
         writer = csv.writer(csv_file)
+        report_writer = csv.DictWriter(
+            report_file,
+            fieldnames=[
+                "image_name",
+                "image_width_px",
+                "image_height_px",
+                "image_size_bytes",
+                "image_size_mb",
+                "processing_time_seconds",
+                "status",
+                "error",
+            ],
+        )
         writer.writerow(["image_name", "plate_text"])
+        report_writer.writeheader()
         successful = 0
         errors = 0
         total_plate_detections = 0
@@ -705,6 +730,19 @@ def main() -> None:
             relative_path = source_path.relative_to(input_dir)
             result = completed_results[index]
             writer.writerow([relative_path.as_posix(), result.get("plate_text", "")])
+            image_size_bytes = result.get("image_size_bytes", source_path.stat().st_size)
+            report_writer.writerow(
+                {
+                    "image_name": relative_path.as_posix(),
+                    "image_width_px": result.get("image_width_px", ""),
+                    "image_height_px": result.get("image_height_px", ""),
+                    "image_size_bytes": image_size_bytes,
+                    "image_size_mb": f"{image_size_bytes / (1024 * 1024):.6f}",
+                    "processing_time_seconds": result.get("processing_time_seconds", ""),
+                    "status": "failed" if result.get("error") else "success",
+                    "error": result.get("error", ""),
+                }
+            )
 
     memory_monitor.stop()
     queue_tracker.stop()
@@ -759,6 +797,7 @@ def main() -> None:
     print(f"Pipeline complete in {total_seconds:.3f} seconds")
     print(f"Final images saved to: {output_dir}")
     print(f"Plate results saved to: {csv_path}")
+    print(f"Processing report saved to: {report_path}")
     print(f"Run log saved to: {log_path}")
     print(f"Parent peak RAM: {megabytes(memory_monitor.parent_peak_rss_bytes):.2f} MB")
     for worker_pid, worker_peak_rss_bytes in sorted(worker_peak_rss_by_pid.items()):
