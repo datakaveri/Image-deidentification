@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "image-deidentification"
+version = "2.2.0"
+description = "Road-survey image de-identification: EXIF stripping, licence-plate, human and watermark redaction"
+readme = "README.md"
+authors = [
+    { name = "Datakaveri", email = "info@datakaveri.org" }
+]
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+requires-python = ">=3.12"
+# Floors are the versions in the environment the pipeline was tested in.
+# torch/torchvision: install from https://download.pytorch.org/whl/cpu for
+# CPU-only builds (see requirements.lock) so pip does not pull CUDA wheels.
+dependencies = [
+    "ultralytics>=8.4,<9",
+    "opencv-python>=5.0,<6",
+    "numpy>=2.4,<3",
+    "tqdm>=4.70,<5",
+    "easyocr>=1.7,<2",
+    "Pillow>=12.2,<13",
+    "psutil>=7.2,<8",
+    "torch>=2.13,<3",
+    "torchvision>=0.28,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1,<10",
+    "pytest-cov>=7.1,<8",
+    "ruff>=0.16,<1",
+    "black>=26.10,<27",
+    "pre-commit>=4.6,<5",
+]
+
+[project.scripts]
+image-deidentification = "image_deidentification.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["src"]
+
+[tool.coverage.run]
+source = ["image_deidentification"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

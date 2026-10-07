@@ -2,7 +2,7 @@
   "input_dir": "~/Downloads/complaint_requests/documents",
   "output_dir": "~/Downloads/complaint_requests/output",
   "temp_dir": "~/Downloads/complaint_requests/temp",
-  "weights": "app/sensitive_data_masking/license_plate_detector.pt",
+  "weights": "models/license_plate_detector.pt",
   "device": "auto",
   "ext": "jpg,jpeg,png,bmp,tif,tiff,webp",
   "exif_strip": true,

@@ -1,8 +1,0 @@
-ultralytics>=8.0.0
-opencv-python
-tqdm
-easyocr
-Pillow
-psutil
-torch
-torchvision

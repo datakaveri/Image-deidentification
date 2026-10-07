@@ -32,7 +32,18 @@ samples/
 
 # Model weights are verified and downloaded at build time via scripts/download_models.py
 models/
+*.pt
+**/*.pt
+**/*.pth
+**/*.onnx
 
-# Two 11.8 MB PostScript screenshots accidentally committed at the repo root
-os
-torch
+# Not needed to build or run the image
+tests/
+.github/
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+.env
+.env.*
+!.env.example

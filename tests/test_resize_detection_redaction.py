@@ -1,12 +1,12 @@
 import numpy as np
 
-from app.deidentification.resize_stage import (
+from image_deidentification.deidentification.contracts import PlateDetection
+from image_deidentification.deidentification.resize_stage import (
     map_human_mask_to_original,
     map_plate_detections_to_original,
     map_watermark_regions_to_original,
     prepare_detection_image,
 )
-from app.deidentification.contracts import PlateDetection
 
 
 def test_prepare_detection_image_scales_down_large_images():
@@ -25,7 +25,13 @@ def test_detection_mapping_uses_original_coordinates():
 
     plate = PlateDetection((10, 20, 30, 40), "ABC123", 0.9, "plate")
     mapped = map_plate_detections_to_original([plate], scale_x, scale_y)
-    assert mapped[0].box == (int(10 / scale_x), int(20 / scale_y), int(30 / scale_x), int(40 / scale_y))
+    # Coordinates are rounded to the nearest pixel, not truncated.
+    assert mapped[0].box == (
+        round(10 / scale_x),
+        round(20 / scale_y),
+        round(30 / scale_x),
+        round(40 / scale_y),
+    )
 
     mask = np.zeros((resized.shape[0], resized.shape[1]), dtype=np.uint8)
     mask[5:15, 10:20] = 255
