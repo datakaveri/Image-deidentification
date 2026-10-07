@@ -5,6 +5,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- Merging a PR that bumps `__version__` now releases it automatically once the tests pass on
+  `main`: CI pushes `skald-image:vX.Y.Z` and `:latest` and creates the tag and GitHub Release.
+  `:latest` only moves to a version higher than every existing tag.
+- `release.yml` (manual tags and re-runs) runs the tests first and also moves `:latest` when the
+  tag is the newest version.
+- `pyproject.toml` reads the version from `__version__`, so a release is a one-line bump; CI
+  fails a PR whose new version has no CHANGELOG section.
+
 ### Fixed
 - `release.yml` creates the GitHub Release with the `gh` CLI instead of a third-party action the
   repo's Actions policy does not allow, which stopped the `v2.2.0` run from starting. It can also

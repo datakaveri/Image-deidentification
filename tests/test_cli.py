@@ -1,8 +1,10 @@
 """CLI and config plumbing. Nothing here loads model weights."""
 
 import json
+import re
 import subprocess
 import sys
+from importlib import metadata
 
 import pytest
 
@@ -10,8 +12,11 @@ import image_deidentification
 from image_deidentification import main as pipeline
 
 
-def test_version_is_exposed():
-    assert image_deidentification.__version__ == "2.2.0"
+def test_version_is_semver_and_matches_package_metadata():
+    version = image_deidentification.__version__
+
+    assert re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)", version)
+    assert metadata.version("image-deidentification") == version
 
 
 def test_parser_toggles_override_config():

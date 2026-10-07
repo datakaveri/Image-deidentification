@@ -1,11 +1,13 @@
 name: Release & Publish Image
 
+# Releases normally happen from ci.yml when a version bump is merged to main.
+# This workflow covers the other cases: a vX.Y.Z tag pushed by hand, or
+# re-publishing an existing tag whose run failed (tags are immutable here, so
+# re-pushing a tag is not an option).
 on:
   push:
     tags:
       - 'v*.*.*'
-  # Publish an existing tag again, e.g. when the tag-push run failed. Tags are
-  # immutable here, so a broken run cannot be fixed by re-pushing the tag.
   workflow_dispatch:
     inputs:
       tag:
@@ -13,28 +15,39 @@ on:
         required: true
 
 permissions:
-  contents: write
-  packages: write
-
-env:
-  IMAGE: ghcr.io/datakaveri/skald-image
-  TAG: ${{ inputs.tag || github.ref_name }}
+  contents: read
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate Tag
-        run: |
-          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            echo "::error::'$TAG' is not a vMAJOR.MINOR.PATCH tag"
-            exit 1
-          fi
+  lint-test:
+    uses: ./.github/workflows/tests.yml
+    with:
+      ref: refs/tags/${{ inputs.tag || github.ref_name }}
 
-      - name: Checkout Code
+  release:
+    needs: lint-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    env:
+      IMAGE: ghcr.io/datakaveri/skald-image
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      # The workflow's own commit provides scripts/; the tagged code, which may
+      # predate them, is checked out separately as the build context.
+      - name: Checkout Workflow Code
+        uses: actions/checkout@v7
+
+      - name: Checkout Tagged Code
         uses: actions/checkout@v7
         with:
           ref: refs/tags/${{ env.TAG }}
+          path: tagged
+
+      # Validates the tag and decides whether it may become :latest.
+      - name: Release Info
+        id: release
+        run: scripts/release_info.sh "$TAG" | tee -a "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -46,17 +59,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Only the version tag is pushed. `latest` is retagged by hand in GHCR to
-      # whichever version is being rolled out (see datakaveri/Docker-Compose).
+      - name: Image Tags and Labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ env.TAG }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.highest == 'true' }}
+
       - name: Build and Push Image
         uses: docker/build-push-action@v7
         with:
-          context: .
+          context: tagged
           push: true
-          tags: ${{ env.IMAGE }}:${{ env.TAG }}
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.version=${{ env.TAG }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
 
       # gh is preinstalled on the runner. The repo only allows GitHub-owned and
@@ -64,9 +83,11 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.release.outputs.highest }}
         run: |
           if gh release view "$TAG" > /dev/null 2>&1; then
             echo "Release $TAG already exists; leaving it as is."
           else
-            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes README.md LICENSE
+            gh release create "$TAG" --verify-tag --title "$TAG" \
+              --generate-notes --latest="$LATEST" README.md LICENSE
           fi

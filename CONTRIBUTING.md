@@ -55,6 +55,28 @@ pip-compile --allow-unsafe --strip-extras --no-emit-trusted-host \
   --extra dev -o requirements-dev.lock pyproject.toml
 ```
 
+## Releasing
+
+A merged version bump is a release; nobody pushes tags or retags images by hand.
+
+1. In your PR, bump `__version__` in `src/image_deidentification/__init__.py` (SemVer:
+   breaking change → major, new feature → minor, fix → patch). `pyproject.toml` reads the
+   version from there.
+2. In `CHANGELOG.md`, move the `[Unreleased]` entries under `## [X.Y.Z] - YYYY-MM-DD` and update
+   the compare links. CI fails the PR if the new version has no CHANGELOG section.
+3. After review, squash merge. Once the tests pass on `main`, CI pushes
+   `ghcr.io/datakaveri/skald-image:vX.Y.Z` and `:latest`, creates the `vX.Y.Z` tag and the
+   GitHub Release. `:latest` only moves forward: a lower version (e.g. a hotfix for an older
+   line) gets its tag but leaves `:latest` where it is.
+
+PRs that don't bump the version publish only `:main` and `:sha-<commit>`.
+
+If a release run fails after the tag exists (tags cannot be changed or re-pushed), re-run it:
+
+```bash
+gh workflow run release.yml -f tag=vX.Y.Z
+```
+
 ## Data and Model Weights
 
 - Never commit images, sample data or model weights. `.gitignore` excludes `*.pt` and

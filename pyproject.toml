@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "image-deidentification"
-version = "2.2.0"
+# Single source of truth: __version__ in src/image_deidentification/__init__.py.
+# Bumping it in a PR releases that version when the PR is merged (see ci.yml).
+dynamic = ["version"]
 description = "Road-survey image de-identification: EXIF stripping, licence-plate, human and watermark redaction"
 readme = "README.md"
 authors = [
@@ -48,6 +50,9 @@ image-deidentification = "image_deidentification.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "image_deidentification.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

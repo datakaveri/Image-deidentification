@@ -11,46 +11,20 @@ permissions:
 
 jobs:
   lint-test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v7
+    uses: ./.github/workflows/tests.yml
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: requirements-dev.lock
-
-      # The lock file carries --extra-index-url https://download.pytorch.org/whl/cpu
-      # and pins torch/torchvision to +cpu builds, so no CUDA wheels are downloaded.
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.lock
-          pip install --no-deps -e .
-
-      - name: Lint and Format Check (Ruff & Black)
-        run: |
-          ruff check .
-          black --check .
-
-      # No step here downloads model weights; the tests run without them.
-      - name: Run Test Suite with Coverage
-        run: |
-          pytest --cov --cov-report=term-missing --cov-report=xml
-
-  # Continuous delivery for main: once the tests pass on a push to main, publish
-  # skald-image:main and skald-image:sha-<short>. Version tags are published by
-  # release.yml, and `latest` is never touched here; it is retagged by hand at
-  # rollout (see datakaveri/Docker-Compose).
-  publish-main:
+  # Continuous delivery for main, once the tests pass:
+  #   always                      -> skald-image:main, skald-image:sha-<short>
+  #   __version__ not yet tagged  -> also :vX.Y.Z, tag vX.Y.Z and a GitHub Release
+  #   ...and it is the highest    -> also :latest (what the TEE compose pulls)
+  # The image is pushed before the tag is created, so a failed build never
+  # leaves a tag behind (tags are immutable here).
+  publish:
     needs: lint-test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
     concurrency:
       group: publish-main
@@ -58,6 +32,10 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
+
+      - name: Release Info
+        id: release
+        run: scripts/release_info.sh | tee -a "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -78,6 +56,8 @@ jobs:
           tags: |
             type=raw,value=main
             type=sha,prefix=sha-
+            type=raw,value=${{ steps.release.outputs.tag }},enable=${{ steps.release.outputs.tagged == 'false' }}
+            type=raw,value=latest,enable=${{ steps.release.outputs.tagged == 'false' && steps.release.outputs.highest == 'true' }}
 
       - name: Build and Push Image
         uses: docker/build-push-action@v7
@@ -88,3 +68,15 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # A tag created with GITHUB_TOKEN does not trigger release.yml, so the
+      # release is created here rather than there; nothing is built twice.
+      - name: Tag and Create GitHub Release
+        if: steps.release.outputs.tagged == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+          LATEST: ${{ steps.release.outputs.highest }}
+        run: |
+          gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" \
+            --generate-notes --latest="$LATEST" README.md LICENSE
