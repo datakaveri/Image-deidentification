@@ -40,3 +40,51 @@ jobs:
       - name: Run Test Suite with Coverage
         run: |
           pytest --cov --cov-report=term-missing --cov-report=xml
+
+  # Continuous delivery for main: once the tests pass on a push to main, publish
+  # skald-image:main and skald-image:sha-<short>. Version tags are published by
+  # release.yml, and `latest` is never touched here; it is retagged by hand at
+  # rollout (see datakaveri/Docker-Compose).
+  publish-main:
+    needs: lint-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: publish-main
+      cancel-in-progress: false
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image Tags and Labels
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/datakaveri/skald-image
+          flavor: latest=false
+          tags: |
+            type=raw,value=main
+            type=sha,prefix=sha-
+
+      - name: Build and Push Image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
