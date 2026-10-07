@@ -23,21 +23,17 @@ DEFAULT_PLATE_MODEL_URL = os.environ.get(
     "PLATE_MODEL_URL",
     "https://github.com/datakaveri/Image-deidentification/releases/download/v2.1.0/license_plate_detector.pt",
 )
-DEFAULT_PLATE_MODEL_SHA256 = (
-    "2d95861825bb4184404344c9cf809f40fd31dba785fe54e8ba5b9a3583789822"
-)
+DEFAULT_PLATE_MODEL_SHA256 = "2d95861825bb4184404344c9cf809f40fd31dba785fe54e8ba5b9a3583789822"
 KNOWN_VALID_PLATE_SHA256 = {
     "2d95861825bb4184404344c9cf809f40fd31dba785fe54e8ba5b9a3583789822",  # models/license_plate_detector.pt (6.25 MB)
-    "8ec3b254a6c87610f037a90957462cafa11a9c03224e33a28c6a1d1ac2ac51b0",  # app/sensitive_data_masking/license_plate_detector.pt (6.24 MB)
+    "8ec3b254a6c87610f037a90957462cafa11a9c03224e33a28c6a1d1ac2ac51b0",  # legacy copy formerly at app/sensitive_data_masking/ (6.24 MB)
 }
 
 DEFAULT_YOLOV8N_URL = os.environ.get(
     "YOLOV8N_URL",
     "https://github.com/ultralytics/assets/releases/download/v8.2.0/yolov8n.pt",
 )
-DEFAULT_YOLOV8N_SHA256 = (
-    "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"
-)
+DEFAULT_YOLOV8N_SHA256 = "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36"
 
 
 def compute_sha256(file_path: Path) -> str:
@@ -195,8 +191,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--link-dest",
-        default="app/sensitive_data_masking/license_plate_detector.pt",
-        help="Secondary path to sync/link (default: app/sensitive_data_masking/license_plate_detector.pt)",
+        default=None,
+        help="Optional secondary path to sync/link the verified weights to (default: none)",
     )
     parser.add_argument(
         "--check-only",
@@ -211,13 +207,15 @@ def main() -> int:
     parser.add_argument(
         "--include-yolov8n",
         action="store_true",
-        help="Also download yolov8n.pt if not present in app/sensitive_data_masking/",
+        help="Also download yolov8n.pt into models/ if not present",
     )
 
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
-    dest_path = (repo_root / args.dest).resolve() if not Path(args.dest).is_absolute() else Path(args.dest)
+    dest_path = (
+        (repo_root / args.dest).resolve() if not Path(args.dest).is_absolute() else Path(args.dest)
+    )
     link_path = (
         (repo_root / args.link_dest).resolve()
         if args.link_dest and not Path(args.link_dest).is_absolute()
@@ -231,7 +229,10 @@ def main() -> int:
             print("[OK] License plate detector model file is present and verified.")
             return 0
         else:
-            print("[FAIL] License plate detector model file missing or checksum invalid.", file=sys.stderr)
+            print(
+                "[FAIL] License plate detector model file missing or checksum invalid.",
+                file=sys.stderr,
+            )
             return 1
 
     # Check if file exists at link_path already (e.g. from local repo checkout)
@@ -262,7 +263,7 @@ def main() -> int:
         print(f"[OK] Synced weights to {link_path}")
 
     if args.include_yolov8n:
-        yolo_dest = repo_root / "app/sensitive_data_masking/yolov8n.pt"
+        yolo_dest = repo_root / "models/yolov8n.pt"
         if not verify_file(yolo_dest, DEFAULT_YOLOV8N_SHA256):
             print("Downloading yolov8n.pt...")
             download_file(

@@ -1,0 +1,35 @@
+name: Bug Report
+description: Report a bug, crash or unexpected redaction result
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach un-redacted images. If something identifying survived the pipeline,
+        report it privately as described in SECURITY.md instead.
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Command or config used, and a non-sensitive way to reproduce it.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: A clear description of what you expected to happen.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Package version or image tag (e.g. `ghcr.io/datakaveri/skald-image:v2.2.0`), and CPU or GPU.

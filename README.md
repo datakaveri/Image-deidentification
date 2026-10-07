@@ -3,8 +3,8 @@
 Automated de-identification pipeline for road-survey imagery. The tool detects and redacts
 personally-identifiable content — **licence plates**, **persons**, and **embedded watermarks** —
 captured during road-survey / road-defect inspection runs.
-The pipeline is packaged under `app/deidentification` and can be driven from the CLI, a
-config file, or a Docker container.
+The pipeline is the `image_deidentification` Python package (under `src/`) and can be driven
+from the CLI, a config file, or a Docker container.
 
 The current workflow is:
 
@@ -12,7 +12,7 @@ The current workflow is:
 
 ```mermaid
 flowchart LR
-    A[Input image directory] --> B[main.py
+    A[Input image directory] --> B[image_deidentification.main
 worker scheduler]
     B --> C[ProcessPoolExecutor]
     C --> D[Worker 1: load models once]
@@ -24,7 +24,7 @@ worker scheduler]
     H --> I[Save final image + GPS EXIF]
     I --> J[CSV output + metrics]
 
-    subgraph App[app/deidentification package]
+    subgraph App[image_deidentification.deidentification]
         F
         G
         H
@@ -32,14 +32,14 @@ worker scheduler]
     end
 ```
 
-The main entrypoint is [main.py](main.py). It loads enabled models once per worker process, processes images in parallel, and avoids writing intermediate masked images to disk unless the caller explicitly uses a temporary debug directory structure.
+The main entrypoint is [src/image_deidentification/main.py](src/image_deidentification/main.py), installed as the `image-deidentification` command. It loads enabled models once per worker process, processes images in parallel, and avoids writing intermediate masked images to disk unless the caller explicitly uses a temporary debug directory structure.
 
 ## Requirements
 
-- Python 3.10+
-- OpenCV, PyTorch, torchvision, ultralytics, EasyOCR, and Pillow
+- Python 3.12+
+- OpenCV, PyTorch, torchvision, ultralytics, EasyOCR, and Pillow (pinned in `pyproject.toml`, locked in `requirements.lock`)
 - CUDA-capable GPU is optional; the pipeline falls back to CPU automatically
-- The YOLO plate model is expected at `models/license_plate_detector.pt` or `app/sensitive_data_masking/license_plate_detector.pt` (downloaded via `scripts/download_models.py`)
+- The YOLO plate model is expected at `models/license_plate_detector.pt`. **Model weights are downloaded, not bundled**: they are not in Git or in the Python package — fetch them with `scripts/download_models.py` (see below)
 
 ## Setup
 
@@ -50,15 +50,24 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-2. Install dependencies:
+2. Install the locked dependencies and the package. The lock file pulls CPU-only
+   `torch`/`torchvision` from `https://download.pytorch.org/whl/cpu`:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.lock
+pip install --no-deps -e .
 ```
+
+   For development (tests, linters, pre-commit) use `requirements-dev.lock` instead,
+   then `pre-commit install`.
+
+   With a CUDA GPU, install `torch`/`torchvision` from the matching PyTorch index
+   first, then `pip install -e .`.
 
 3. Download model weights:
 
-Large model binaries are stored outside Git as GitHub Release assets. Fetch and verify them by running:
+Large model binaries are stored outside Git as GitHub Release assets. Fetch and verify them
+(SHA-256 checked) into `models/` by running:
 
 ```bash
 python scripts/download_models.py
@@ -75,6 +84,9 @@ During Docker builds, weights are automatically downloaded and verified at build
 ## Configuration
 
 The pipeline reads settings from `pipeline_config.json` and supports command-line overrides.
+Relative paths in the config and on the command line resolve against the current working
+directory (`/app` inside the container). Configs that still point `weights` at the old
+`app/sensitive_data_masking/` location fall back to `models/`.
 
 Example config keys:
 
@@ -93,7 +105,7 @@ A typical config is:
   "input_dir": "train/images",
   "output_dir": "outputs/final",
   "temp_dir": "outputs/temp",
-  "weights": "app/sensitive_data_masking/license_plate_detector.pt",
+  "weights": "models/license_plate_detector.pt",
   "device": "auto",
   "mask_mode": "black",
   "ocr": false,
@@ -117,10 +129,10 @@ A typical config is:
 
 ## Current package-based pipeline
 
-The reusable API lives in [app/deidentification/__init__.py](app/deidentification/__init__.py). The package exports the main detection, redaction, resize, and EXIF helpers:
+The reusable API lives in [src/image_deidentification/deidentification/__init__.py](src/image_deidentification/deidentification/__init__.py). The package exports the main detection, redaction, resize, and EXIF helpers:
 
 ```python
-from app.deidentification import (
+from image_deidentification.deidentification import (
     detect_human_mask,
     detect_plate_boxes,
     detect_watermark_regions,
@@ -135,11 +147,11 @@ from app.deidentification import (
 
 The implementation is split into stage modules:
 
-- [app/deidentification/plate_stage.py](app/deidentification/plate_stage.py): YOLO plate detection and redaction
-- [app/deidentification/deeplab_stage.py](app/deidentification/deeplab_stage.py): DeepLab human segmentation and masking
-- [app/deidentification/watermark_stage.py](app/deidentification/watermark_stage.py): EasyOCR-based watermark detection and redaction
-- [app/deidentification/exif_stage.py](app/deidentification/exif_stage.py): GPS-only EXIF extraction and final save with metadata preservation
-- [app/deidentification/resize_stage.py](app/deidentification/resize_stage.py): optional resize step before final save
+- [deidentification/plate_stage.py](src/image_deidentification/deidentification/plate_stage.py): YOLO plate detection and redaction
+- [deidentification/deeplab_stage.py](src/image_deidentification/deidentification/deeplab_stage.py): DeepLab human segmentation and masking
+- [deidentification/watermark_stage.py](src/image_deidentification/deidentification/watermark_stage.py): EasyOCR-based watermark detection and redaction
+- [deidentification/exif_stage.py](src/image_deidentification/deidentification/exif_stage.py): GPS-only EXIF extraction and final save with metadata preservation
+- [deidentification/resize_stage.py](src/image_deidentification/deidentification/resize_stage.py): optional resize step before final save
 
 Per image, the pipeline now follows this order:
 
@@ -152,7 +164,7 @@ Per image, the pipeline now follows this order:
 
 ## Parallel detection and worker processes
 
-The orchestration in [main.py](main.py) runs one task per image over a ProcessPoolExecutor.
+The orchestration in [main.py](src/image_deidentification/main.py) runs one task per image over a ProcessPoolExecutor.
 
 Behavior:
 
@@ -192,19 +204,20 @@ Queue log entries use `waiting` for submitted jobs that have not started, `runni
 ## Running the full pipeline
 
 ```bash
-python main.py --config pipeline_config.json
+image-deidentification --config pipeline_config.json
+# equivalent: python -m image_deidentification --config pipeline_config.json
 ```
 
 To choose a custom log path:
 
 ```bash
-python main.py --config pipeline_config.json --workers 2 --log-file outputs/pipeline.log
+image-deidentification --config pipeline_config.json --workers 2 --log-file outputs/pipeline.log
 ```
 
 Optional CLI overrides:
 
 ```bash
-python main.py \
+image-deidentification \
   --config pipeline_config.json \
   --input-dir train/images \
   --output-dir outputs/final \
@@ -229,23 +242,41 @@ python main.py \
 - EXIF metadata is preserved only for GPS/geo tags before the final save step
 - Intermediate stage images are not normally written to disk as part of the main package pipeline
 
+## Running tests
+
+```bash
+pip install -r requirements-dev.lock
+pip install --no-deps -e .
+ruff check . && black --check .
+pytest --cov
+```
+
+The tests do not need model weights or network access. CI runs the same steps on every
+pull request (`.github/workflows/ci.yml`).
+
 ## Docker
 
-Build the image:
+Build the image. The build downloads and verifies the plate model from the GitHub
+Release given by `PLATE_MODEL_URL` (override with `--build-arg`), and pre-caches the
+EasyOCR and DeepLab weights so the container needs no network at run time:
 
 ```bash
-docker build -t image-deidentification .
+docker build -t skald-image .
 ```
 
-Run the pipeline in the container:
+The image entrypoint is `image-deidentification`; arguments after the image name replace the
+default `--config /app/config/pipeline_config.json`. Run it against the standard mount layout:
 
 ```bash
-docker run --rm -it \
-  -v $(pwd)/train:/app/train \
-  -v $(pwd)/outputs:/app/outputs \
-  image-deidentification \
-  python main.py --config pipeline_config.json
+docker run --rm \
+  -v $(pwd)/train/images:/app/data:ro \
+  -v $(pwd)/config:/app/config:ro \
+  -v $(pwd)/outputs:/app/output \
+  skald-image
 ```
+
+The container runs as root on purpose: the TEE bind-mounts host directories at
+`/app/output` and must be able to write there regardless of host ownership.
 
 ## Docker Compose
 
@@ -258,40 +289,40 @@ docker compose up --build
 Run the pipeline inside the compose service:
 
 ```bash
-docker compose run --rm skald-image \
-  python main.py --config pipeline_config.json
+docker compose run --rm skald-image --workers 2
 ```
 
 ## Project structure
 
 ```text
 Image-deidentification/
-├── app/
-│   ├── deidentification/
-│   │   ├── __init__.py
+├── src/image_deidentification/
+│   ├── __init__.py               # __version__
+│   ├── __main__.py               # python -m image_deidentification
+│   ├── main.py                   # CLI entry point and worker scheduler
+│   ├── deidentification/        # stage modules used by the pipeline
 │   │   ├── contracts.py
 │   │   ├── deeplab_stage.py
 │   │   ├── exif_stage.py
 │   │   ├── plate_stage.py
 │   │   ├── resize_stage.py
 │   │   └── watermark_stage.py
+│   ├── exif_geo_tag/
 │   ├── sensitive_data_masking/
-│   │   └── mask_plates.py
-│   └── ...
-├── models/
-│   └── (license_plate_detector.pt - gitignored, fetched at build/setup)
+│   ├── watermark_removal/
+│   └── resizing.py
+├── tests/
 ├── scripts/
-│   ├── download_models.py
+│   ├── download_models.py        # fetch + SHA-256 verify model weights
 │   └── download_models.sh
-├── main.py
-├── pipeline_config.json
-├── requirements.txt
+├── models/                       # gitignored; filled by scripts/download_models.py
+├── config/pipeline_config.json   # container default config
+├── pipeline_config.json          # local default config
+├── pyproject.toml
+├── requirements.lock             # runtime lock (pip-compile)
+├── requirements-dev.lock         # runtime + dev tools lock
 ├── Dockerfile
-├── docker-compose.yml
-├── README.md
-├── outputs/
-├── train/
-└── app/images_test/
+└── docker-compose.yml            # local build/test only
 ```
 
 ## Notes
@@ -300,3 +331,12 @@ Image-deidentification/
 - EasyOCR is the active OCR engine for watermark detection.
 - Plate detection uses Ultralytics YOLO, and human masking uses torchvision DeepLabV3.
 - The project preserves only the geo/GPS EXIF footprint before the final save so sensitive metadata is stripped while location data remains available when needed.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Changes are recorded in
+[CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE).

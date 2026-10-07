@@ -21,10 +21,22 @@ train/**/*.jpeg
 *.pth
 *.onnx
 *.pt
-models/*.pt
+models/
 
 # Ignore editor and system files
 __pycache__/
 *.py[cod]
 .DS_Store
 *.swp
+
+# Tool caches, coverage and build output
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+*.egg-info/
+build/
+dist/
+
+# Local environment (see .env.example)
+.env
