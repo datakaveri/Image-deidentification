@@ -254,6 +254,14 @@ pytest --cov
 The tests do not need model weights or network access. CI runs the same steps on every
 pull request (`.github/workflows/ci.yml`).
 
+Images are published to `ghcr.io/datakaveri/skald-image`:
+
+| Event | Tags |
+| --- | --- |
+| merge to `main` (after tests pass) | `main`, `sha-<short-commit>` |
+| push of a `vX.Y.Z` tag (`release.yml`) | `vX.Y.Z`, plus a GitHub Release |
+| rollout (manual) | `latest` is retagged by hand; the TEE compose pulls `latest` |
+
 ## Docker
 
 Build the image. The build downloads and verifies the plate model from the GitHub

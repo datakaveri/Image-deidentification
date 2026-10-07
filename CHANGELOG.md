@@ -5,7 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-07
+
 ### Added
+- CI publishes `ghcr.io/datakaveri/skald-image:main` and `:sha-<commit>` after the tests pass on
+  every merge to `main`. `latest` is still retagged by hand at rollout.
 - Apache-2.0 `LICENSE`, `CONTRIBUTING.md`, `SECURITY.md` and this changelog.
 - `pyproject.toml` with bounded dependency pins, an `image-deidentification` console script and
   `python -m image_deidentification`; `requirements.lock` and `requirements-dev.lock` generated
@@ -28,3 +32,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Removed
 - `requirements.txt` (superseded by `pyproject.toml` and the lock files).
 - The commented-out legacy subprocess orchestrator at the end of `main.py`.
+
+[Unreleased]: https://github.com/datakaveri/Image-deidentification/compare/v2.2.0...HEAD
+[2.2.0]: https://github.com/datakaveri/Image-deidentification/compare/v2.1.0...v2.2.0
