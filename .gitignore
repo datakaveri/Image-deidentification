@@ -17,9 +17,11 @@ train/**/*.jpeg
 *.jpeg
 *.png
 
-# Ignore model weights and large binaries
+# Ignore model weights and large binaries (downloaded via scripts/download_models.py)
 *.pth
 *.onnx
+*.pt
+models/*.pt
 
 # Ignore editor and system files
 __pycache__/

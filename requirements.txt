@@ -3,5 +3,6 @@ opencv-python
 tqdm
 easyocr
 Pillow
+psutil
 torch
 torchvision

@@ -30,8 +30,7 @@ samples/
 **/*.tiff
 **/*.webp
 
-# Scratch copy of the plate weights used during review (the real ones live in
-# app/sensitive_data_masking/ and ARE intentionally baked in — see Dockerfile)
+# Model weights are verified and downloaded at build time via scripts/download_models.py
 models/
 
 # Two 11.8 MB PostScript screenshots accidentally committed at the repo root

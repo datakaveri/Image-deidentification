@@ -45,9 +45,13 @@ RUN pip install --no-cache-dir --upgrade pip && \
         torch torchvision && \
     pip install --no-cache-dir -r requirements.txt
 
+# GitHub Release asset URL and SHA-256 for downloading plate detector weights at build time.
+ARG PLATE_MODEL_URL="https://github.com/datakaveri/Image-deidentification/releases/download/v2.1.0/license_plate_detector.pt"
+ARG PLATE_MODEL_SHA256="2d95861825bb4184404344c9cf809f40fd31dba785fe54e8ba5b9a3583789822"
+
 # Pre-download the model sets that are otherwise fetched on first run, so the
-# container works with no egress. The YOLO plate weights are already in the
-# repo and get copied in below.
+# container works with no egress. EasyOCR and DeepLab weights are downloaded
+# directly into their system cache directories.
 RUN mkdir -p "$YOLO_CONFIG_DIR" && \
     python -c "import easyocr; easyocr.Reader(['en'], gpu=False)" && \
     python -c "from torchvision.models.segmentation import deeplabv3_resnet50, DeepLabV3_ResNet50_Weights as W; deeplabv3_resnet50(weights=W.DEFAULT)" && \
@@ -62,6 +66,16 @@ print('telemetry sync = False at', settings.file)" && \
 COPY main.py pipeline_config.json ./
 COPY app/ ./app/
 COPY config/ ./config/
+COPY scripts/ ./scripts/
+
+# Download and verify the plate detector model weights at build time so the binary
+# does not need to be tracked in Git. If weights are already present from local build
+# context, it verifies SHA-256; otherwise it downloads from PLATE_MODEL_URL.
+RUN python scripts/download_models.py \
+    --url "$PLATE_MODEL_URL" \
+    --sha256 "$PLATE_MODEL_SHA256" \
+    --dest "models/license_plate_detector.pt" \
+    --link-dest "app/sensitive_data_masking/license_plate_detector.pt"
 
 # Create the mount points so a run with no volumes still fails cleanly rather
 # than mkdir-ing into the image.
