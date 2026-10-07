@@ -5,6 +5,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- `release.yml` creates the GitHub Release with the `gh` CLI instead of a third-party action the
+  repo's Actions policy does not allow, which stopped the `v2.2.0` run from starting. It can also
+  be run by hand (`workflow_dispatch`) to publish an existing tag.
+
 ## [2.2.0] - 2026-10-07
 
 ### Added

@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  # Publish an existing tag again, e.g. when the tag-push run failed. Tags are
+  # immutable here, so a broken run cannot be fixed by re-pushing the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to publish (vMAJOR.MINOR.PATCH)'
+        required: true
 
 permissions:
   contents: write
@@ -11,13 +18,23 @@ permissions:
 
 env:
   IMAGE: ghcr.io/datakaveri/skald-image
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: Validate Tag
+        run: |
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::'$TAG' is not a vMAJOR.MINOR.PATCH tag"
+            exit 1
+          fi
+
       - name: Checkout Code
         uses: actions/checkout@v7
+        with:
+          ref: refs/tags/${{ env.TAG }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -36,17 +53,20 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ env.IMAGE }}:${{ github.ref_name }}
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.version=${{ github.ref_name }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.TAG }}
           cache-from: type=gha
 
+      # gh is preinstalled on the runner. The repo only allows GitHub-owned and
+      # verified actions, so a third-party release action would not start.
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          generate_release_notes: true
-          files: |
-            README.md
-            LICENSE
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving it as is."
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes README.md LICENSE
+          fi
