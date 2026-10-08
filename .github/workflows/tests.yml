@@ -1,0 +1,60 @@
+name: Tests
+
+# Reusable lint + test job, called by ci.yml (PRs and main) and release.yml
+# (tag releases), so nothing is published without the same checks passing.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to test (defaults to the triggering ref)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: requirements-dev.lock
+
+      # The lock file carries --extra-index-url https://download.pytorch.org/whl/cpu
+      # and pins torch/torchvision to +cpu builds, so no CUDA wheels are downloaded.
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.lock
+          pip install --no-deps -e .
+
+      - name: Lint and Format Check (Ruff & Black)
+        run: |
+          ruff check .
+          black --check .
+
+      # No step here downloads model weights; the tests run without them.
+      - name: Run Test Suite with Coverage
+        run: |
+          pytest --cov --cov-report=term-missing --cov-report=xml
+
+      # A version without a tag will be released when this lands on main, so it
+      # must already have its CHANGELOG section. Skipped when re-testing a tag.
+      - name: Release Notes Check
+        if: inputs.ref == ''
+        run: |
+          eval "$(scripts/release_info.sh)"
+          if [[ "$tagged" == "false" ]] && ! grep -q "^## \[$version\]" CHANGELOG.md; then
+            echo "::error file=CHANGELOG.md::__version__ is $version (not yet released) but CHANGELOG.md has no '## [$version]' section"
+            exit 1
+          fi
+          echo "version=$version tagged=$tagged"

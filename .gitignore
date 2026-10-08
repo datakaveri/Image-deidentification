@@ -40,3 +40,7 @@ dist/
 
 # Local environment (see .env.example)
 .env
+
+# Editor settings
+.vscode/
+.idea/

@@ -254,13 +254,16 @@ pytest --cov
 The tests do not need model weights or network access. CI runs the same steps on every
 pull request (`.github/workflows/ci.yml`).
 
-Images are published to `ghcr.io/datakaveri/skald-image`:
+Images are published to `ghcr.io/datakaveri/skald-image` after the tests pass:
 
 | Event | Tags |
 | --- | --- |
-| merge to `main` (after tests pass) | `main`, `sha-<short-commit>` |
-| push of a `vX.Y.Z` tag (`release.yml`) | `vX.Y.Z`, plus a GitHub Release |
-| rollout (manual) | `latest` is retagged by hand; the TEE compose pulls `latest` |
+| merge to `main` | `main`, `sha-<short-commit>` |
+| merge to `main` that bumps `__version__` | also `vX.Y.Z` and `latest`, plus the `vX.Y.Z` tag and GitHub Release |
+| `vX.Y.Z` tag pushed by hand, or `release.yml` run manually | `vX.Y.Z` (and `latest` if it is the newest version) |
+
+The TEE compose pulls `latest`, so merging a version bump rolls it out. See
+[CONTRIBUTING.md](CONTRIBUTING.md#releasing).
 
 ## Docker
 
